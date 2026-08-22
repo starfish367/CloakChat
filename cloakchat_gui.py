@@ -23,6 +23,7 @@ if str(PROJECT_DIR) not in sys.path:
 
 from kivy.app import App
 from kivy.clock import Clock
+from kivy.graphics import Color, RoundedRectangle
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
@@ -59,102 +60,195 @@ class CloakChatGUI(App):
     def build(self):
         self.title = "CloakChat"
         self.contacts = ContactStore(self.user_data_dir)
-        root = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(8))
+        try:
+            from kivy.core.window import Window
+            Window.clearcolor = (0.035, 0.055, 0.09, 1)
+            Window.minimum_width = dp(420)
+            Window.minimum_height = dp(640)
+        except Exception:
+            pass
 
-        title = Label(
-            text="[b]CloakChat[/b]\n[size=12]Anonymous • Encrypted • Direct[/size]",
-            markup=True,
-            size_hint_y=None,
-            height=dp(58),
+        root = BoxLayout(
+            orientation="vertical",
+            padding=[dp(16), dp(14)],
+            spacing=dp(10),
         )
-        root.add_widget(title)
 
-        options = GridLayout(cols=2, size_hint_y=None, height=dp(105), spacing=dp(6))
-        options.add_widget(Label(text="Transport:"))
+        header = BoxLayout(size_hint_y=None, height=dp(62), spacing=dp(10))
+        title = Label(
+            text="[b]CloakChat[/b]\n[size=12][color=#93A4C3]PRIVATE • ENCRYPTED • DIRECT[/color][/size]",
+            markup=True,
+            halign="left",
+            valign="middle",
+        )
+        title.bind(size=self._sync_text_size)
+        header.add_widget(title)
+        self.security_badge = Label(
+            text="●  E2EE\n[size=11]READY[/size]",
+            markup=True,
+            color=(0.35, 0.92, 0.68, 1),
+            halign="center",
+            valign="middle",
+            size_hint_x=None,
+            width=dp(82),
+        )
+        self.security_badge.bind(size=self._sync_text_size)
+        header.add_widget(self.security_badge)
+        root.add_widget(header)
+
+        connection_card = BoxLayout(
+            orientation="vertical",
+            padding=[dp(12), dp(10)],
+            spacing=dp(7),
+            size_hint_y=None,
+            height=dp(228),
+        )
+        with connection_card.canvas.before:
+            Color(0.07, 0.10, 0.16, 1)
+            connection_bg = RoundedRectangle(pos=connection_card.pos, size=connection_card.size, radius=[dp(14)])
+        connection_card.bind(pos=lambda w, p: setattr(connection_bg, "pos", w.pos))
+        connection_card.bind(size=lambda w, s: setattr(connection_bg, "size", w.size))
+
+        connection_card.add_widget(Label(
+            text="[b]KẾT NỐI[/b]  [color=#93A4C3]Chọn cách kết nối[/color]",
+            markup=True,
+            halign="left",
+            size_hint_y=None,
+            height=dp(25),
+        ))
+        fields = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(82))
+        fields.add_widget(Label(text="Mạng", color=(0.58, 0.65, 0.78, 1), halign="left"))
         self.transport = Spinner(
             text="LAN trực tiếp",
             values=("LAN trực tiếp", "Tor / Onion"),
             size_hint_y=None,
             height=dp(42),
+            background_normal="",
+            background_color=(0.12, 0.18, 0.28, 1),
+            color=(0.92, 0.95, 1, 1),
         )
-        options.add_widget(self.transport)
-        options.add_widget(Label(text="Vai trò:"))
+        fields.add_widget(self.transport)
+        fields.add_widget(Label(text="Vai trò", color=(0.58, 0.65, 0.78, 1), halign="left"))
         self.role = Spinner(
             text="Host",
             values=("Host", "Join"),
             size_hint_y=None,
             height=dp(42),
+            background_normal="",
+            background_color=(0.12, 0.18, 0.28, 1),
+            color=(0.92, 0.95, 1, 1),
         )
-        options.add_widget(self.role)
-        options.add_widget(Label(text="Địa chỉ Join:"))
+        self.role.bind(text=lambda *_: self._role_changed())
+        fields.add_widget(self.role)
+        connection_card.add_widget(fields)
+
         self.address = TextInput(
-            hint_text="IP:cổng hoặc tên .onion (chỉ dùng khi Join)",
+            hint_text="Địa chỉ Join: IP:cổng hoặc tên .onion",
             multiline=False,
             size_hint_y=None,
-            height=dp(42),
+            height=dp(43),
+            padding=[dp(12), dp(11)],
+            background_normal="",
+            background_color=(0.11, 0.15, 0.23, 1),
+            foreground_color=(0.92, 0.95, 1, 1),
+            hint_text_color=(0.45, 0.53, 0.67, 1),
         )
-        options.add_widget(self.address)
-        root.add_widget(options)
+        connection_card.add_widget(self.address)
+        root.add_widget(connection_card)
 
-        action_row = BoxLayout(size_hint_y=None, height=dp(45), spacing=dp(6))
-        self.start_button = Button(text="Bắt đầu")
+        action_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
+        self.start_button = Button(text="BẮT ĐẦU", background_normal="", background_color=(0.15, 0.63, 0.48, 1), bold=True)
         self.start_button.bind(on_press=self.start_connection)
-        self.stop_button = Button(text="Dừng", disabled=True)
+        self.stop_button = Button(text="DỪNG", background_normal="", background_color=(0.55, 0.18, 0.23, 1), disabled=True)
         self.stop_button.bind(on_press=lambda *_: self.stop_connection())
-        self.qr_button = Button(text="QR", disabled=True)
-        self.qr_button.bind(on_press=lambda *_: self.show_qr())
-        self.bluetooth_button = Button(text="Bluetooth", disabled=True)
-        self.bluetooth_button.bind(on_press=lambda *_: self.share_bluetooth())
-        self.contacts_button = Button(text="Danh bạ")
-        self.contacts_button.bind(on_press=lambda *_: self.show_contacts())
         action_row.add_widget(self.start_button)
         action_row.add_widget(self.stop_button)
-        action_row.add_widget(self.qr_button)
-        action_row.add_widget(self.bluetooth_button)
-        action_row.add_widget(self.contacts_button)
         root.add_widget(action_row)
 
+        tools = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
+        self.qr_button = Button(text="QR INVITE", background_normal="", background_color=(0.12, 0.18, 0.28, 1), disabled=True)
+        self.qr_button.bind(on_press=lambda *_: self.show_qr())
+        self.bluetooth_button = Button(text="BLUETOOTH", background_normal="", background_color=(0.12, 0.18, 0.28, 1), disabled=True)
+        self.bluetooth_button.bind(on_press=lambda *_: self.share_bluetooth())
+        self.contacts_button = Button(text="DANH BẠ", background_normal="", background_color=(0.12, 0.18, 0.28, 1))
+        self.contacts_button.bind(on_press=lambda *_: self.show_contacts())
+        tools.add_widget(self.qr_button)
+        tools.add_widget(self.bluetooth_button)
+        tools.add_widget(self.contacts_button)
+        root.add_widget(tools)
+
         self.connection_label = Label(
-            text="Chưa kết nối",
+            text="●  Sẵn sàng — LAN không dùng Tor, E2EE vẫn bật",
+            color=(0.58, 0.65, 0.78, 1),
             halign="left",
             valign="middle",
             size_hint_y=None,
-            height=dp(58),
+            height=dp(38),
         )
         self.connection_label.bind(size=self._sync_text_size)
         root.add_widget(self.connection_label)
 
+        chat_panel = BoxLayout(orientation="vertical", padding=[dp(10), dp(8)], spacing=dp(4))
+        with chat_panel.canvas.before:
+            Color(0.055, 0.08, 0.13, 1)
+            chat_bg = RoundedRectangle(pos=chat_panel.pos, size=chat_panel.size, radius=[dp(14)])
+        chat_panel.bind(pos=lambda w, p: setattr(chat_bg, "pos", w.pos))
+        chat_panel.bind(size=lambda w, s: setattr(chat_bg, "size", w.size))
+        chat_title = Label(text="[b]TIN NHẮN[/b]  [color=#93A4C3]E2EE channel[/color]", markup=True, halign="left", size_hint_y=None, height=dp(25))
+        chat_panel.add_widget(chat_title)
         scroll = ScrollView()
         self.chat_log = TextInput(
             readonly=True,
             multiline=True,
             size_hint_y=None,
             padding=[dp(8), dp(8)],
+            background_normal="",
+            background_color=(0.04, 0.06, 0.10, 1),
+            foreground_color=(0.82, 0.88, 0.96, 1),
+            cursor_color=(0, 0, 0, 0),
         )
         self.chat_log.bind(minimum_height=self.chat_log.setter("height"))
         scroll.add_widget(self.chat_log)
-        root.add_widget(scroll)
+        chat_panel.add_widget(scroll)
+        root.add_widget(chat_panel)
 
-        compose = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
+        compose = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(8))
         self.message_input = TextInput(
-            hint_text="Tin nhắn mã hóa...",
+            hint_text="Viết tin nhắn bảo mật...",
             multiline=False,
             disabled=True,
+            padding=[dp(12), dp(13)],
+            background_normal="",
+            background_color=(0.11, 0.15, 0.23, 1),
+            foreground_color=(0.92, 0.95, 1, 1),
+            hint_text_color=(0.45, 0.53, 0.67, 1),
         )
         self.message_input.bind(on_text_validate=self.send_message)
-        self.send_button = Button(text="Gửi", size_hint_x=None, width=dp(80), disabled=True)
+        self.send_button = Button(text="GỬI", size_hint_x=None, width=dp(74), disabled=True, background_normal="", background_color=(0.15, 0.63, 0.48, 1), bold=True)
         self.send_button.bind(on_press=self.send_message)
         compose.add_widget(self.message_input)
         compose.add_widget(self.send_button)
         root.add_widget(compose)
 
-        self._append_log("Sẵn sàng. LAN không dùng Tor nhưng vẫn bật E2EE.")
+        self._append_log("Sẵn sàng. Chọn LAN để kết nối nội bộ hoặc Tor để dùng .onion.")
         atexit.register(self.stop_connection)
         return root
 
     @staticmethod
     def _sync_text_size(widget, _size):
         widget.text_size = (widget.width - dp(8), widget.height)
+
+    def _role_changed(self):
+        """Host không cần nhập địa chỉ; Join mới dùng ô invite."""
+        if hasattr(self, "address") and hasattr(self, "role"):
+            is_join = self.role.text == "Join"
+            self.address.disabled = not is_join
+            self.address.opacity = 1 if is_join else 0.55
+            self.address.hint_text = (
+                "Dán invite QR hoặc IP:cổng / tên .onion"
+                if is_join
+                else "Host sẽ hiển thị địa chỉ sau khi bấm Bắt đầu"
+            )
 
     def _append_log(self, text: str):
         """Cập nhật UI trên main thread của Kivy."""
@@ -397,7 +491,8 @@ class CloakChatGUI(App):
             self._append_log(f"[!] Invite trong danh bạ không hợp lệ: {exc}")
 
     def _chat_ready(self, _dt):
-        self.connection_label.text = "Đã kết nối • E2EE hoạt động • Safety Number đã xác nhận"
+        self.connection_label.text = "●  Đã kết nối — E2EE hoạt động — Safety Number đã xác nhận"
+        self.security_badge.text = "●  E2EE\n[size=11]SECURE[/size]"
         self.message_input.disabled = False
         self.send_button.disabled = False
         self._append_log("[+] Chat đã bắt đầu. Tin nhắn được mã hóa AES-256-GCM.")
@@ -446,7 +541,11 @@ class CloakChatGUI(App):
             self.role.disabled = False
             self.message_input.disabled = True
             self.send_button.disabled = True
-            self.connection_label.text = "Đã ngắt kết nối"
+            self.connection_label.text = "●  Đã ngắt kết nối — sẵn sàng cho phiên mới"
+            self.security_badge.text = "●  E2EE\n[size=11]READY[/size]"
+            self.qr_button.disabled = True
+            self.bluetooth_button.disabled = True
+            self.current_invite = None
         Clock.schedule_once(reset, 0)
 
     def on_stop(self):
