@@ -1,0 +1,147 @@
+name: Build CloakChat
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  linux:
+    name: Linux GUI executable
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-gui.txt
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils libgl1-mesa-dev libmtdev-dev
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements-gui.txt
+
+      - name: Build Linux executable
+        run: python -m PyInstaller --clean --noconfirm CloakChatGUI.spec
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CloakChat-linux-x86_64
+          path: dist/CloakChatGUI
+          if-no-files-found: error
+
+  windows:
+    name: Windows GUI executable
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-gui.txt
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements-gui.txt
+
+      - name: Build Windows executable
+        run: python -m PyInstaller --clean --noconfirm CloakChatGUI.spec
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CloakChat-windows-x64
+          path: dist/CloakChatGUI.exe
+          if-no-files-found: error
+
+  android:
+    name: Android APK
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git zip unzip autoconf libtool pkg-config zlib1g-dev \
+            libncurses5-dev libncursesw5-dev cmake libffi-dev \
+            libssl-dev automake autopoint gettext
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install Buildozer
+        run: |
+          python -m venv .venv-buildozer
+          . .venv-buildozer/bin/activate
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install buildozer cython
+
+      - name: Build debug APK
+        run: |
+          . .venv-buildozer/bin/activate
+          buildozer -v android debug
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CloakChat-android-debug
+          path: bin/*.apk
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, android]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release-files
+          find release-artifacts -type f -exec cp {} release-files/ \;
+          chmod +x release-files/CloakChatGUI 2>/dev/null || true
+          ls -lah release-files
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" release-files/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --generate-notes \
+            --title "CloakChat ${GITHUB_REF_NAME}"

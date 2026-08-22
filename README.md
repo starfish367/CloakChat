@@ -165,6 +165,19 @@ bash android/build-apk.sh
 
 APK debug sẽ nằm trong `bin/`. Trên Android, chọn `LAN trực tiếp` để chat E2EE không cần Tor. Tor trong APK cần tích hợp Orbot hoặc binary Tor Android riêng; không dùng binary Tor Linux/Windows trong APK.
 
+## Build tự động bằng GitHub Actions
+
+Workflow `.github/workflows/build.yml` được chạy khi push vào `main`, khi push tag dạng `v*`, hoặc khi bấm **Run workflow** trong tab **Actions**. Workflow tạo ba artifact: `CloakChat-linux-x86_64`, `CloakChat-windows-x64` và `CloakChat-android-debug`. Khi chạy từ tag phiên bản, job cuối sẽ gom các artifact và tạo GitHub Release tự động.
+
+Để chạy build thủ công, vào repository trên GitHub, mở **Actions → Build CloakChat → Run workflow**. Để tạo Release mới sau khi workflow đã được thêm:
+
+```bash
+git tag -a v1.2.0 -m "CloakChat v1.2.0"
+git push origin v1.2.0
+```
+
+Binary Linux do runner GitHub tạo là `x86_64`. Armbian ARM cần build riêng trên chính Armbian hoặc dùng runner ARM tương ứng; không đổi tên binary x86_64 thành ARM được.
+
 ## Đóng gói CLI Windows bằng PyInstaller
 
 Đặt `tor.exe` tại `tor_bin/tor.exe`, sau đó:
