@@ -715,8 +715,8 @@ def run_join(daemon: TorDaemon) -> None:
 
 def print_dependencies() -> None:
     safe_print(
-        "\nYêu cầu: Python 3.9+, tor.exe, stem, cryptography và PySocks. "
-        "Tor phải là bản phân phối đáng tin cậy."
+        "\nYêu cầu: Python 3.9+, Tor, stem, cryptography và PySocks. "
+        "Trên Windows dùng tor.exe; Linux/Android dùng binary tor đáng tin cậy."
     )
 
 
