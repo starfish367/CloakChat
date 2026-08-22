@@ -2,9 +2,11 @@
 
 CloakChat là ứng dụng chat P2P ẩn danh hai người qua mạng Tor. Phiên bản hiện tại là CLI, sử dụng một file Python duy nhất và ưu tiên khả năng chạy trên **PC Linux** तथा **Android thông qua Termux**. Mã hóa đầu-cuối dùng X25519, HKDF-SHA256 và AES-256-GCM; địa chỉ Host là ephemeral onion service nên không được lưu cố định sau khi thoát.
 
-> **Tình trạng nền tảng:** Linux chạy trực tiếp bằng Python. Android chạy bằng Termux với Python và Tor được cài trong môi trường Termux. Đây chưa phải APK native có giao diện Android riêng; mục tiêu của bản đầu tiên là cung cấp một client CLI có thể chạy thật trên Android và PC Linux.
+> **Tình trạng nền tảng:** `CloakChat.py` là bản CLI cho Linux/Android Termux. `cloakchat_gui.py` là bản giao diện cửa sổ Kivy cho Windows, Linux và Android. Chế độ LAN E2EE hoạt động trên cả ba nền tảng; APK Android hiện ưu tiên LAN vì Tor trong APK cần tích hợp binary/service Android riêng.
 
 ## Tính năng chính
+
+File `cloakchat_gui.py` cung cấp giao diện cửa sổ dùng chung cho Windows, Linux và Android. Core mạng/mật mã vẫn nằm trong `CloakChat.py`, vì vậy GUI và CLI dùng chung X25519, Safety Number và AES-256-GCM. GUI có nút tạo QR invite, chia sẻ invite qua Android Sharesheet/Bluetooth và danh bạ cục bộ.
 
 | Thành phần | Triển khai |
 |---|---|
@@ -17,6 +19,10 @@ CloakChat là ứng dụng chat P2P ẩn danh hai người qua mạng Tor. Phiê
 | TCP protocol | Frame length 4 byte big-endian để chống dồn/trộn packet |
 | MitM verification | Safety Number 30 chữ số, chia thành 6 nhóm 5 chữ số |
 | Runtime | Main thread nhập liệu, receiver thread nhận và giải mã |
+| QR invite | Payload có version/checksum; không chứa private key hoặc session key |
+| Bluetooth | Android Sharesheet cho phép chọn Bluetooth để gửi invite; desktop có fallback QR |
+| Danh bạ | Lưu cục bộ tên + invite trong app data, không đồng bộ máy chủ |
+| Vanity onion | Wrapper `tools/vanity_onion.py` gọi `mkp224o` để tạo prefix dễ nhớ |
 | Cleanup | `atexit`, SIGINT/SIGTERM, đóng socket, dừng Tor và xóa DataDirectory tạm |
 
 ## Cài đặt trên PC Linux
@@ -94,6 +100,22 @@ Sau handshake, cả hai phía sẽ hiển thị cùng một **Safety Number**. H
 
 Trong màn hình chat, nhập tin nhắn rồi nhấn Enter. Nhập `exit` để đóng phiên, dừng Tor và xóa dữ liệu tạm.
 
+### QR, Bluetooth và danh bạ
+
+Sau khi Host có địa chỉ, nút `QR` tạo ảnh QR chứa invite có checksum. Invite chỉ chứa transport và địa chỉ kết nối, không chứa private key hoặc session key. Trên Android, nút `Bluetooth` mở Android Sharesheet; người dùng có thể chọn Bluetooth để chuyển invite. Trên desktop, hãy dùng QR hoặc sao chép invite.
+
+Nút `Danh bạ` lưu tên và invite trong thư mục dữ liệu cục bộ của ứng dụng. Danh bạ không được đồng bộ lên máy chủ. Khi nạp một invite từ danh bạ, GUI tự chọn lại transport LAN/Tor.
+
+### Vanity onion
+
+Vanity onion không rút ngắn địa chỉ v3; nó chỉ tạo prefix dễ nhớ. Cài `mkp224o` từ nguồn đáng tin cậy rồi chạy:
+
+```bash
+python3 tools/vanity_onion.py cloakchat -o ~/cloakchat-vanity
+```
+
+Private key được tạo trong thư mục output và phải được bảo vệ. Prefix càng dài càng tốn thời gian/tài nguyên, đồng thời không thay thế Safety Number.
+
 ## Kiểm tra cục bộ
 
 ```bash
@@ -101,7 +123,49 @@ python -m py_compile CloakChat.py
 python -m unittest discover -s tests -v
 ```
 
-## Đóng gói Windows bằng PyInstaller
+## Giao diện cửa sổ trên Linux/Windows
+
+Cài dependency GUI và chạy:
+
+```bash
+python3 -m pip install -r requirements-gui.txt
+python3 cloakchat_gui.py
+```
+
+Trên Linux/Armbian, build executable bằng:
+
+```bash
+bash linux/build-gui.sh
+./dist/CloakChatGUI
+```
+
+Tor cần được cài hệ thống nếu chọn `Tor / Onion`:
+
+```bash
+sudo apt install tor
+```
+
+Trên Windows, đặt `tor.exe` tại `tor_bin/tor.exe`, sau đó chạy PowerShell:
+
+```powershell
+py -m pip install -r requirements-gui.txt
+py -m PyInstaller --clean --noconfirm CloakChatGUI.spec
+```
+
+File tạo ra là `dist/CloakChatGUI.exe`. PyInstaller phải chạy trên đúng hệ điều hành và kiến trúc đích.
+
+## Giao diện Android bằng Buildozer
+
+Build APK trên máy Linux:
+
+```bash
+sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake
+bash android/build-apk.sh
+```
+
+APK debug sẽ nằm trong `bin/`. Trên Android, chọn `LAN trực tiếp` để chat E2EE không cần Tor. Tor trong APK cần tích hợp Orbot hoặc binary Tor Android riêng; không dùng binary Tor Linux/Windows trong APK.
+
+## Đóng gói CLI Windows bằng PyInstaller
 
 Đặt `tor.exe` tại `tor_bin/tor.exe`, sau đó:
 

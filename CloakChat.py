@@ -42,7 +42,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 try:
     import socks  # PySocks
@@ -149,6 +149,16 @@ def resolve_tor_executable() -> Path:
     )
 
 
+def find_free_tcp_port(host: str = SOCKS_HOST) -> int:
+    """Chọn một cổng TCP trống trên localhost."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind((host, 0))
+        return int(probe.getsockname()[1])
+    finally:
+        probe.close()
+
+
 def wait_for_tcp_port(
     host: str,
     port: int,
@@ -191,6 +201,9 @@ class TorDaemon:
         self.service_id: Optional[str] = None
         self.log_path: Optional[Path] = None
         self.log_handle = None
+        self.socks_port = SOCKS_PORT
+        self.control_port = CONTROL_PORT
+        self.using_existing_tor = False
         self._stopped = False
 
     def _diagnostic_log(self) -> str:
@@ -205,10 +218,32 @@ class TorDaemon:
             return f"Không đọc được log Tor: {exc}"
 
     def start(self) -> None:
-        if self.process is not None:
+        if self.process is not None or self.controller is not None:
             return
 
+        # Nếu Tor hệ thống đã chạy và mở ControlPort với cookie auth, dùng lại
+        # nó thay vì tạo daemon thứ hai tranh chấp cổng SOCKS 9050.
+        try:
+            existing = Controller.from_port(address=CONTROL_HOST, port=CONTROL_PORT)
+            existing.authenticate()
+            wait_for_tcp_port(SOCKS_HOST, SOCKS_PORT, 2.0)
+            self.controller = existing
+            self.socks_port = SOCKS_PORT
+            self.control_port = CONTROL_PORT
+            self.using_existing_tor = True
+            safe_print("[+] Đang dùng Tor hệ thống hiện có (9050/9051).")
+            return
+        except Exception:
+            try:
+                existing.close()  # type: ignore[union-attr]
+            except Exception:
+                pass
+
         tor_executable = resolve_tor_executable()
+        self.socks_port = int(os.environ.get("CLOAKCHAT_SOCKS_PORT", find_free_tcp_port()))
+        self.control_port = int(os.environ.get("CLOAKCHAT_CONTROL_PORT", find_free_tcp_port()))
+        if self.socks_port == self.control_port:
+            self.control_port = find_free_tcp_port()
         self.data_dir = Path(tempfile.mkdtemp(prefix="cloakchat_tor_"))
         self.log_path = self.data_dir / "tor.log"
         self.log_handle = self.log_path.open("ab")
@@ -217,9 +252,9 @@ class TorDaemon:
             "--DataDirectory",
             str(self.data_dir),
             "--SocksPort",
-            f"{SOCKS_HOST}:{SOCKS_PORT}",
+            f"{SOCKS_HOST}:{self.socks_port}",
             "--ControlPort",
-            f"{CONTROL_HOST}:{CONTROL_PORT}",
+            f"{CONTROL_HOST}:{self.control_port}",
             "--CookieAuthentication",
             "1",
             "--AvoidDiskWrites",
@@ -246,20 +281,20 @@ class TorDaemon:
             )
             wait_for_tcp_port(
                 CONTROL_HOST,
-                CONTROL_PORT,
+                self.control_port,
                 CONNECT_TIMEOUT,
                 process=self.process,
                 diagnostic=self._diagnostic_log,
             )
             wait_for_tcp_port(
                 SOCKS_HOST,
-                SOCKS_PORT,
+                self.socks_port,
                 CONNECT_TIMEOUT,
                 process=self.process,
                 diagnostic=self._diagnostic_log,
             )
             self.controller = Controller.from_port(
-                address=CONTROL_HOST, port=CONTROL_PORT
+                address=CONTROL_HOST, port=self.control_port
             )
             self.controller.authenticate()
             safe_print("[+] Tor daemon đã sẵn sàng.")
@@ -316,7 +351,7 @@ class TorDaemon:
         self._stopped = True
         self.remove_ephemeral_service()
 
-        if self.controller is not None:
+        if self.controller is not None and not self.using_existing_tor:
             try:
                 self.controller.signal("SHUTDOWN")
             except Exception:
@@ -326,6 +361,7 @@ class TorDaemon:
             except Exception:
                 pass
             self.controller = None
+        self.using_existing_tor = False
 
         if self.process is not None:
             try:
@@ -438,7 +474,10 @@ def decrypt_message(key: bytes, packet: bytes) -> str:
         ) from exc
 
 
-def create_join_socket(onion_address: str) -> socks.socksocket:
+def create_join_socket(
+    onion_address: str,
+    socks_port: int = SOCKS_PORT,
+) -> socks.socksocket:
     """Kết nối tới onion service qua SOCKS5 với DNS được phân giải từ xa."""
     address = onion_address.strip().lower()
     if address.startswith("http://"):
@@ -463,7 +502,7 @@ def create_join_socket(onion_address: str) -> socks.socksocket:
     connection.set_proxy(
         proxy_type=socks.SOCKS5,
         addr=SOCKS_HOST,
-        port=SOCKS_PORT,
+        port=socks_port,
         rdns=True,
     )
     connection.settimeout(CONNECT_TIMEOUT)
@@ -475,9 +514,19 @@ def create_join_socket(onion_address: str) -> socks.socksocket:
 class ChatSession:
     """Một phiên chat sau khi handshake và Safety Number đã được xác nhận."""
 
-    def __init__(self, connection: socket.socket, is_host: bool) -> None:
+    def __init__(
+        self,
+        connection: socket.socket,
+        is_host: bool,
+        confirm_callback: Optional[Callable[[str], bool]] = None,
+        message_callback: Optional[Callable[[str], None]] = None,
+        status_callback: Optional[Callable[[str], None]] = None,
+    ) -> None:
         self.connection = connection
         self.is_host = is_host
+        self.confirm_callback = confirm_callback
+        self.message_callback = message_callback
+        self.status_callback = status_callback
         self.private_key = X25519PrivateKey.generate()
         self.local_public = self.private_key.public_key().public_bytes(
             encoding=serialization.Encoding.Raw,
@@ -487,6 +536,12 @@ class ChatSession:
         self.stop_event = threading.Event()
         self.send_lock = threading.Lock()
         self.receiver_thread: Optional[threading.Thread] = None
+
+    def _status(self, message: str) -> None:
+        if self.status_callback is not None:
+            self.status_callback(message)
+        else:
+            safe_print(message)
 
     def _send(self, payload: bytes) -> None:
         with self.send_lock:
@@ -506,12 +561,17 @@ class ChatSession:
         self.session_key = derive_session_key(self.private_key, remote_public)
         number = safety_number(self.local_public, remote_public)
 
-        safe_print("\n" + "=" * 68)
-        safe_print("SAFETY NUMBER - HÃY ĐỐI CHIẾU NGOÀI BĂNG VỚI BẠN CHAT")
-        safe_print(f"        {number}")
-        safe_print("=" * 68)
-        answer = input("Safety Number đúng và đã được đối chiếu? [y/N]: ").strip().lower()
-        local_confirmed = answer == "y"
+        if self.confirm_callback is not None:
+            local_confirmed = bool(self.confirm_callback(number))
+        else:
+            safe_print("\n" + "=" * 68)
+            safe_print("SAFETY NUMBER - HÃY ĐỐI CHIẾU NGOÀI BĂNG VỚI BẠN CHAT")
+            safe_print(f"        {number}")
+            safe_print("=" * 68)
+            answer = input(
+                "Safety Number đúng và đã được đối chiếu? [y/N]: "
+            ).strip().lower()
+            local_confirmed = answer == "y"
         self._send(bytes([PACKET_CONFIRM, ord("y") if local_confirmed else ord("n")]))
 
         remote_confirm = recv_packet(self.connection)
@@ -528,7 +588,7 @@ class ChatSession:
                 "Safety Number chưa được cả hai phía xác nhận; kết nối đã bị đóng."
             )
         self.connection.settimeout(None)
-        safe_print("[+] Safety Number đã được cả hai phía xác nhận.")
+        self._status("[+] Safety Number đã được cả hai phía xác nhận.")
 
     def start_receiver(self) -> None:
         self.receiver_thread = threading.Thread(
@@ -546,8 +606,11 @@ class ChatSession:
                     if self.session_key is None:
                         raise ProtocolError("Chưa có khóa phiên.")
                     message = decrypt_message(self.session_key, packet)
-                    safe_print(f"\n[Peer] {message}")
-                    safe_print("[Bạn] ",)
+                    if self.message_callback is not None:
+                        self.message_callback(message)
+                    else:
+                        safe_print(f"\n[Peer] {message}")
+                        safe_print("[Bạn] ",)
                 elif packet == bytes([PACKET_CLOSE]):
                     safe_print("\n[!] Peer đã đóng phiên chat.")
                     break
@@ -555,13 +618,13 @@ class ChatSession:
                     raise ProtocolError("Nhận được loại packet không được phép.")
         except socket.timeout:
             if not self.stop_event.is_set():
-                safe_print("\n[!] Hết thời gian chờ kết nối.")
+                self._status("[!] Hết thời gian chờ kết nối.")
         except (ConnectionError, OSError):
             if not self.stop_event.is_set():
-                safe_print("\n[!] Kết nối mạng đã đóng.")
+                self._status("[!] Kết nối mạng đã đóng.")
         except ProtocolError as exc:
             if not self.stop_event.is_set():
-                safe_print(f"\n[!] Lỗi giao thức/bảo mật: {exc}")
+                self._status(f"[!] Lỗi giao thức/bảo mật: {exc}")
         finally:
             self.stop_event.set()
 
@@ -791,7 +854,7 @@ def run_join(daemon: TorDaemon) -> None:
     """Join qua Tor; luồng E2EE phía dưới giống hệt chế độ LAN."""
     onion = input("Nhập địa chỉ .onion của Host: ").strip()
     safe_print("[*] Đang kết nối tới onion service qua SOCKS5 Tor...")
-    connection = create_join_socket(onion)
+    connection = create_join_socket(onion, socks_port=daemon.socks_port)
     try:
         run_chat(connection, is_host=False)
     finally:

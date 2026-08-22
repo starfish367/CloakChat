@@ -9,10 +9,17 @@ env/
 .mypy_cache/
 .ruff_cache/
 
-# PyInstaller
+# PyInstaller / Kivy / Buildozer
 build/
 dist/
 *.spec
+!CloakChatGUI.spec
+!buildozer.spec
+.buildozer/
+bin/
+*.apk
+.venv-gui/
+.venv-buildozer/
 
 # Temporary Tor data
 cloakchat_tor_*/
