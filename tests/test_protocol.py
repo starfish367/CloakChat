@@ -53,6 +53,28 @@ class ProtocolTests(unittest.TestCase):
         right.close()
         self.assertEqual(received, [b"frame"])
 
+    def test_direct_lan_socket(self):
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+        received = []
+
+        def accept_once():
+            connection, _ = server.accept()
+            received.append(connection.recv(4))
+            connection.close()
+
+        thread = threading.Thread(target=accept_once)
+        thread.start()
+        client = MODULE.create_lan_socket(f"127.0.0.1:{port}")
+        client.sendall(b"LAN!")
+        client.close()
+        thread.join(timeout=2)
+        server.close()
+        self.assertEqual(received, [b"LAN!"])
+
 
 if __name__ == "__main__":
     unittest.main()

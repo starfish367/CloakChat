@@ -9,8 +9,10 @@ CloakChat là ứng dụng chat P2P ẩn danh hai người qua mạng Tor. Phiê
 | Thành phần | Triển khai |
 |---|---|
 | Tor transport | Tor daemon tạm thời, SOCKS5 `127.0.0.1:9050`, ControlPort `127.0.0.1:9051`, CookieAuthentication |
-| Host | Tạo ephemeral onion service v3 và lắng nghe TCP localhost |
-| Join | Kết nối `.onion` qua SOCKS5 với DNS remote (`rdns=True`) |
+| Host qua Tor | Tạo ephemeral onion service v3 và lắng nghe TCP localhost |
+| Join qua Tor | Kết nối `.onion` qua SOCKS5 với DNS remote (`rdns=True`) |
+| Host LAN | Lắng nghe IP nội bộ trực tiếp, không khởi động Tor |
+| Join LAN | Kết nối `IP:cổng` trực tiếp, không dùng SOCKS5/Tor |
 | E2EE | X25519, HKDF-SHA256 với `cloakchat_v1`, AES-256-GCM nonce 12 byte |
 | TCP protocol | Frame length 4 byte big-endian để chống dồn/trộn packet |
 | MitM verification | Safety Number 30 chữ số, chia thành 6 nhóm 5 chữ số |
@@ -76,7 +78,17 @@ Nếu bạn đã chạy sai các lệnh trước đó và thấy `.venv/bin/acti
 
 ## Cách sử dụng
 
+Menu có hai nhóm kết nối. Lựa chọn `1` và `2` dùng Tor cho Host/Join `.onion`. Lựa chọn `3` là `Host LAN`, lựa chọn `4` là `Join LAN`; hai lựa chọn LAN **không khởi động Tor và không dùng SOCKS5**.
+
+### Chế độ Tor
+
 Chọn `Host` để tạo địa chỉ `.onion`, sau đó gửi địa chỉ này cho người còn lại qua một kênh phù hợp. Sau dòng `[+] Tor daemon đã sẵn sàng.`, chương trình sẽ hiện `[ * ] Tor đã chạy...` và chờ tối đa 180 giây để Tor bootstrap rồi công bố onion service. Đây là trạng thái bình thường; chỉ khi xuất hiện lỗi timeout hoặc thông báo Bootstrap thất bại thì phiên mới có vấn đề. Người kia chọn `Join` và nhập địa chỉ `.onion` sau khi địa chỉ được hiển thị.
+
+### Chế độ LAN trực tiếp
+
+Trên máy Host, chọn `3`. Chương trình sẽ hiện địa chỉ dạng `IP:cổng`, ví dụ `192.168.1.20:45678`. Gửi địa chỉ này cho peer, rồi trên máy peer chọn `4` và nhập đúng `IP:cổng`. Hai thiết bị phải cùng mạng nội bộ hoặc có đường định tuyến tới nhau; nếu Linux có firewall, cần cho phép cổng TCP được in trên màn hình.
+
+Chế độ LAN chỉ thay đổi **lớp truyền tải**. Sau khi socket kết nối, cả hai phía vẫn chạy X25519, HKDF-SHA256, AES-256-GCM, framing TCP và Safety Number như chế độ Tor. Hai người vẫn phải đối chiếu Safety Number qua một kênh tin cậy bên ngoài.
 
 Sau handshake, cả hai phía sẽ hiển thị cùng một **Safety Number**. Hai người phải đối chiếu số này qua một kênh tin cậy bên ngoài và chỉ nhập `y` khi số trùng khớp. Nếu một phía nhập khác `y`, kết nối sẽ bị từ chối.
 
@@ -101,7 +113,7 @@ pyinstaller --onefile --console --add-binary "tor_bin/tor.exe;tor_bin" CloakChat
 
 Safety Number chỉ có tác dụng chống MitM khi được đối chiếu qua kênh ngoài băng có tính xác thực. Tor ẩn tuyến mạng nhưng không thay thế xác thực danh tính. Ứng dụng không lưu lịch sử chat, tuy nhiên hệ điều hành, terminal, crash dump hoặc công cụ bên ngoài vẫn có thể tạo dữ liệu riêng.
 
-Đây là phần mềm liên lạc bảo mật cần được kiểm thử và audit độc lập trước khi dùng cho dữ liệu nhạy cảm cao. Không chạy `tor.exe` hoặc binary Tor không rõ nguồn gốc.
+Đây là phần mềm liên lạc bảo mật cần được kiểm thử và audit độc lập trước khi dùng cho dữ liệu nhạy cảm cao. Chế độ LAN không ẩn địa chỉ IP khỏi mạng nội bộ; nó chỉ tắt Tor, còn E2EE vẫn hoạt động. Không chạy `tor.exe` hoặc binary Tor không rõ nguồn gốc.
 
 ## Giấy phép
 

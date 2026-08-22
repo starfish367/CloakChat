@@ -631,18 +631,104 @@ def install_signal_handlers() -> None:
         signal.signal(signal.SIGTERM, handler)
 
 
-def accept_host_connection(listener: socket.socket) -> socket.socket:
-    """Chờ kết nối inbound từ Tor, cho phép thoát sạch bằng Ctrl+C."""
+def get_local_ipv4() -> str:
+    """Lấy IPv4 LAN mà máy dùng để đi tới mạng nội bộ."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # Không gửi dữ liệu; connect UDP chỉ giúp hệ điều hành chọn interface.
+        probe.connect(("192.0.2.1", 80))
+        return probe.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        probe.close()
+
+
+def accept_host_connection(
+    listener: socket.socket,
+    transport_name: str = "Tor",
+) -> socket.socket:
+    """Chờ kết nối inbound và cho phép thoát sạch bằng Ctrl+C."""
     listener.settimeout(1.0)
-    safe_print("[*] Đang chờ peer kết nối qua onion service...")
+    safe_print(f"[*] Đang chờ peer kết nối qua {transport_name}...")
     while not _SHUTDOWN.is_set():
         try:
             connection, address = listener.accept()
-            safe_print(f"[+] Đã nhận kết nối Tor từ {address[0]}.")
+            safe_print(f"[+] Đã nhận kết nối {transport_name} từ {address[0]}.")
             return connection
         except socket.timeout:
             continue
     raise KeyboardInterrupt
+
+
+def run_host_lan() -> None:
+    """Host trực tiếp trên LAN, không khởi động Tor và không dùng SOCKS5."""
+    global _ACTIVE_LISTENER
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    _ACTIVE_LISTENER = listener
+    try:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("0.0.0.0", 0))
+        internal_port = listener.getsockname()[1]
+        listener.listen(1)
+        safe_print("\n[LAN HOST] Chế độ LAN trực tiếp: Tor đã được tắt.")
+        safe_print(f"[LAN HOST] IP nội bộ: {get_local_ipv4()}")
+        safe_print(f"[LAN HOST] Cổng: {internal_port}")
+        safe_print(
+            f"[LAN HOST] Gửi IP và cổng cho peer: {get_local_ipv4()}:{internal_port}"
+        )
+        safe_print(
+            "[LAN HOST] E2EE vẫn bật; hai phía sẽ đối chiếu Safety Number sau khi kết nối."
+        )
+        connection = accept_host_connection(listener, transport_name="LAN")
+        try:
+            run_chat(connection, is_host=True)
+        finally:
+            try:
+                connection.close()
+            except OSError:
+                pass
+    finally:
+        listener.close()
+        _ACTIVE_LISTENER = None
+
+
+def create_lan_socket(address: str) -> socket.socket:
+    """Kết nối TCP trực tiếp tới IPv4/hostname trong mạng nội bộ."""
+    value = address.strip()
+    if ":" not in value:
+        raise ValueError("Địa chỉ LAN phải có dạng IP:cổng, ví dụ 192.168.1.20:45678.")
+    host, port_text = value.rsplit(":", 1)
+    host = host.strip()
+    try:
+        port = int(port_text)
+    except ValueError as exc:
+        raise ValueError("Cổng LAN không hợp lệ.") from exc
+    if not host or not (1 <= port <= 65535):
+        raise ValueError("IP/hostname hoặc cổng LAN không hợp lệ.")
+    connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    connection.settimeout(CONNECT_TIMEOUT)
+    try:
+        connection.connect((host, port))
+        connection.settimeout(None)
+        return connection
+    except Exception:
+        connection.close()
+        raise
+
+
+def run_join_lan() -> None:
+    """Join LAN trực tiếp, không khởi động Tor và không dùng SOCKS5."""
+    address = input("Nhập IP:cổng LAN của Host: ").strip()
+    safe_print("[*] Đang kết nối trực tiếp trong mạng nội bộ; không dùng Tor...")
+    connection = create_lan_socket(address)
+    try:
+        run_chat(connection, is_host=False)
+    finally:
+        try:
+            connection.close()
+        except OSError:
+            pass
 
 
 def run_chat(connection: socket.socket, is_host: bool) -> None:
@@ -673,6 +759,7 @@ def run_chat(connection: socket.socket, is_host: bool) -> None:
 
 
 def run_host(daemon: TorDaemon) -> None:
+    """Host qua Tor; luồng E2EE phía dưới giống hệt chế độ LAN."""
     global _ACTIVE_LISTENER
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     _ACTIVE_LISTENER = listener
@@ -687,7 +774,7 @@ def run_host(daemon: TorDaemon) -> None:
         safe_print(
             "[HOST] Hãy gửi địa chỉ này cho peer qua kênh an toàn, rồi chờ kết nối."
         )
-        connection = accept_host_connection(listener)
+        connection = accept_host_connection(listener, transport_name="Tor")
         try:
             run_chat(connection, is_host=True)
         finally:
@@ -701,6 +788,7 @@ def run_host(daemon: TorDaemon) -> None:
 
 
 def run_join(daemon: TorDaemon) -> None:
+    """Join qua Tor; luồng E2EE phía dưới giống hệt chế độ LAN."""
     onion = input("Nhập địa chỉ .onion của Host: ").strip()
     safe_print("[*] Đang kết nối tới onion service qua SOCKS5 Tor...")
     connection = create_join_socket(onion)
@@ -729,25 +817,35 @@ def main() -> int:
 
     try:
         while True:
-            safe_print("\n[1] Host - tạo onion service tạm thời")
-            safe_print("[2] Join - kết nối vào onion service")
-            safe_print("[3] Thoát")
+            safe_print("\n[1] Host - tạo onion service qua Tor")
+            safe_print("[2] Join - kết nối .onion qua Tor")
+            safe_print("[3] Host LAN - IP nội bộ, không dùng Tor, vẫn E2EE")
+            safe_print("[4] Join LAN - IP nội bộ, không dùng Tor, vẫn E2EE")
+            safe_print("[5] Thoát")
             choice = input("Lựa chọn: ").strip()
-            if choice == "3":
+            if choice == "5":
                 return 0
-            if choice not in ("1", "2"):
+            if choice not in ("1", "2", "3", "4"):
                 safe_print("[!] Lựa chọn không hợp lệ.")
                 continue
 
             _SHUTDOWN.clear()
-            daemon = TorDaemon()
-            _ACTIVE_DAEMON = daemon
+            daemon: Optional[TorDaemon] = None
             try:
-                daemon.start()
-                if choice == "1":
-                    run_host(daemon)
+                if choice == "3":
+                    # Không tạo TorDaemon trong chế độ LAN.
+                    run_host_lan()
+                elif choice == "4":
+                    # Không tạo TorDaemon trong chế độ LAN.
+                    run_join_lan()
                 else:
-                    run_join(daemon)
+                    daemon = TorDaemon()
+                    _ACTIVE_DAEMON = daemon
+                    daemon.start()
+                    if choice == "1":
+                        run_host(daemon)
+                    else:
+                        run_join(daemon)
             except PermissionError as exc:
                 safe_print(f"[!] {exc}")
             except KeyboardInterrupt:
@@ -756,7 +854,10 @@ def main() -> int:
                 safe_print(f"[!] Không thể hoàn tất phiên: {exc}")
             finally:
                 close_active_resources()
-                safe_print("[*] Tài nguyên Tor và dữ liệu tạm đã được dọn dẹp.")
+                if choice in ("3", "4"):
+                    safe_print("[*] Phiên LAN đã dọn dẹp socket; Tor không được khởi động.")
+                else:
+                    safe_print("[*] Tài nguyên Tor và dữ liệu tạm đã được dọn dẹp.")
     except (KeyboardInterrupt, EOFError):
         safe_print("\n[*] Đang thoát CloakChat...")
         return 0
