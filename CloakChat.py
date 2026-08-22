@@ -1,0 +1,720 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+CloakChat - ứng dụng chat P2P ẩn danh 2 người qua Tor.
+
+Đây là một file mã nguồn duy nhất, có thể chạy trực tiếp bằng Python hoặc
+đóng gói bằng PyInstaller.
+
+Phụ thuộc:
+    python -m pip install stem cryptography PySocks
+
+Cấu trúc khi chạy từ mã nguồn:
+    CloakChat.py
+    tor_bin/
+        tor.exe
+
+Ví dụ đóng gói trên Windows:
+    pyinstaller --onefile --console --add-binary "tor_bin/tor.exe;tor_bin" CloakChat.py
+
+Lưu ý an toàn quan trọng:
+    Safety Number phải được hai người đối chiếu qua một kênh tin cậy khác
+    (trực tiếp, cuộc gọi đã xác thực, hoặc kênh có tính toàn vẹn). Nếu không
+    đối chiếu, X25519 vẫn cung cấp bí mật chuyển tiếp, nhưng không tự nó ngăn
+    được tấn công Man-in-the-Middle.
+"""
+
+from __future__ import annotations
+
+import atexit
+import hashlib
+import os
+import shutil
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+from typing import Optional, Tuple
+
+try:
+    import socks  # PySocks
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric.x25519 import (
+        X25519PrivateKey,
+        X25519PublicKey,
+    )
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from stem.control import Controller
+except ImportError as exc:
+    missing = str(exc).split("'")[-2] if "'" in str(exc) else str(exc)
+    raise SystemExit(
+        f"Thiếu thư viện '{missing}'. Cài đặt bằng lệnh: "
+        "python -m pip install stem cryptography PySocks"
+    ) from exc
+
+
+APP_NAME = "CloakChat"
+PROTOCOL_VERSION = b"cloakchat_v1"
+SOCKS_HOST = "127.0.0.1"
+SOCKS_PORT = 9050
+CONTROL_HOST = "127.0.0.1"
+CONTROL_PORT = 9051
+HIDDEN_SERVICE_PORT = 80
+CONNECT_TIMEOUT = 30.0
+CONFIRM_TIMEOUT = 180.0
+MAX_FRAME_SIZE = 1_048_576
+MAX_MESSAGE_BYTES = 64 * 1024
+
+PACKET_HANDSHAKE = 0x01
+PACKET_MESSAGE = 0x02
+PACKET_CONFIRM = 0x03
+PACKET_CLOSE = 0x04
+
+AAD_MESSAGE = PROTOCOL_VERSION + b"|message"
+
+_PRINT_LOCK = threading.Lock()
+_SHUTDOWN = threading.Event()
+_ACTIVE_DAEMON: Optional["TorDaemon"] = None
+_ACTIVE_SESSION: Optional["ChatSession"] = None
+_ACTIVE_LISTENER: Optional[socket.socket] = None
+
+
+BANNER = r"""
+   ____ _             _    ____ _           _
+  / ___| | ___   __ _| | __/ ___| |__   __ _| |_ 
+ | |   | |/ _ \ / _` | |/ / |   | '_ \ / _` | __|
+ | |___| | (_) | (_| |   <| |___| | | | (_| | |_
+  \____|_|\___/ \__,_|_|\_\\____|_| |_|\__,_|\__|
+
+             Anonymous. Encrypted. Direct.
+"""
+
+
+def safe_print(message: str = "") -> None:
+    """In ra màn hình mà không để output của hai thread bị chồng lên nhau."""
+    with _PRINT_LOCK:
+        print(message, flush=True)
+
+
+def get_application_dir() -> Path:
+    """Lấy thư mục chứa tài nguyên, tương thích cả Python thường và PyInstaller."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)  # type: ignore[attr-defined]
+    return Path(__file__).resolve().parent
+
+
+def resolve_tor_executable() -> Path:
+    """Tìm Tor daemon trên Windows, Linux hoặc Android/Termux."""
+    override = os.environ.get("CLOAKCHAT_TOR_EXECUTABLE")
+    candidates = []
+    if override:
+        candidates.append(Path(override).expanduser())
+
+    app_dir = get_application_dir()
+    binary_name = "tor.exe" if os.name == "nt" else "tor"
+    candidates.extend(
+        [
+            app_dir / "tor_bin" / binary_name,
+            Path.cwd() / "tor_bin" / binary_name,
+        ]
+    )
+
+    # Termux thường cài Tor trong PREFIX/bin; shutil.which hỗ trợ các bản
+    # Linux cài Tor qua apt, dnf hoặc pacman.
+    termux_prefix = os.environ.get("PREFIX")
+    if termux_prefix:
+        candidates.append(Path(termux_prefix) / "bin" / "tor")
+    system_tor = shutil.which("tor")
+    if system_tor:
+        candidates.append(Path(system_tor))
+
+    for candidate in candidates:
+        if candidate.is_file() and (os.name == "nt" or os.access(candidate, os.X_OK)):
+            return candidate.resolve()
+    searched = "\n".join(f"  - {path}" for path in candidates)
+    raise FileNotFoundError(
+        "Không tìm thấy Tor daemon. Trên Windows đặt tor.exe vào tor_bin/; "
+        "trên Linux/Android cài gói tor hoặc dùng CLOAKCHAT_TOR_EXECUTABLE. "
+        "Đã tìm:\n" + searched
+    )
+
+
+def wait_for_tcp_port(host: str, port: int, timeout: float) -> None:
+    """Chờ một cổng TCP sẵn sàng, hết thời gian thì ném TimeoutError."""
+    deadline = time.monotonic() + timeout
+    last_error: Optional[Exception] = None
+    while time.monotonic() < deadline and not _SHUTDOWN.is_set():
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.settimeout(0.5)
+        try:
+            probe.connect((host, port))
+            return
+        except OSError as exc:
+            last_error = exc
+            time.sleep(0.25)
+        finally:
+            probe.close()
+    raise TimeoutError(
+        f"Tor không mở cổng {host}:{port} trong {timeout:.0f} giây "
+        f"({last_error})."
+    )
+
+
+class TorDaemon:
+    """Quản lý vòng đời Tor daemon và ephemeral onion service."""
+
+    def __init__(self) -> None:
+        self.process: Optional[subprocess.Popen[bytes]] = None
+        self.controller: Optional[Controller] = None
+        self.data_dir: Optional[Path] = None
+        self.service_id: Optional[str] = None
+        self._stopped = False
+
+    def start(self) -> None:
+        if self.process is not None:
+            return
+
+        tor_executable = resolve_tor_executable()
+        self.data_dir = Path(tempfile.mkdtemp(prefix="cloakchat_tor_"))
+        command = [
+            str(tor_executable),
+            "--DataDirectory",
+            str(self.data_dir),
+            "--SocksPort",
+            f"{SOCKS_HOST}:{SOCKS_PORT}",
+            "--ControlPort",
+            f"{CONTROL_HOST}:{CONTROL_PORT}",
+            "--CookieAuthentication",
+            "1",
+            "--AvoidDiskWrites",
+            "1",
+        ]
+
+        startupinfo = None
+        creationflags = 0
+        if os.name == "nt":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        try:
+            self.process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
+                close_fds=(os.name != "nt"),
+            )
+            wait_for_tcp_port(CONTROL_HOST, CONTROL_PORT, CONNECT_TIMEOUT)
+            wait_for_tcp_port(SOCKS_HOST, SOCKS_PORT, CONNECT_TIMEOUT)
+            self.controller = Controller.from_port(
+                address=CONTROL_HOST, port=CONTROL_PORT
+            )
+            self.controller.authenticate()
+            safe_print("[+] Tor daemon đã sẵn sàng.")
+        except Exception:
+            self.stop()
+            raise
+
+    def create_ephemeral_service(self, internal_port: int) -> str:
+        """Tạo onion service tạm thời, ánh xạ cổng onion 80 vào localhost."""
+        if self.controller is None:
+            raise RuntimeError("Tor controller chưa được khởi tạo.")
+        try:
+            service = self.controller.create_ephemeral_hidden_service(
+                {HIDDEN_SERVICE_PORT: internal_port},
+                key_type="NEW",
+                key_content="ED25519-V3",
+                await_publication=True,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Không thể tạo onion service tạm thời: {exc}") from exc
+        self.service_id = str(service.service_id)
+        return f"{self.service_id}.onion"
+
+    def remove_ephemeral_service(self) -> None:
+        if self.controller is not None and self.service_id:
+            try:
+                self.controller.remove_ephemeral_hidden_service(self.service_id)
+            except Exception:
+                pass
+            finally:
+                self.service_id = None
+
+    def stop(self) -> None:
+        if self._stopped:
+            return
+        self._stopped = True
+        self.remove_ephemeral_service()
+
+        if self.controller is not None:
+            try:
+                self.controller.signal("SHUTDOWN")
+            except Exception:
+                pass
+            try:
+                self.controller.close()
+            except Exception:
+                pass
+            self.controller = None
+
+        if self.process is not None:
+            try:
+                self.process.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                try:
+                    self.process.terminate()
+                    self.process.wait(timeout=3)
+                except Exception:
+                    try:
+                        self.process.kill()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            self.process = None
+
+        if self.data_dir is not None:
+            shutil.rmtree(self.data_dir, ignore_errors=True)
+            self.data_dir = None
+
+
+class ProtocolError(Exception):
+    """Lỗi giao thức hoặc dữ liệu nhận được không hợp lệ."""
+
+
+def recv_exact(sock: socket.socket, size: int) -> bytes:
+    """Đọc chính xác size byte, xử lý việc recv trả về dữ liệu từng phần."""
+    if size < 0 or size > MAX_FRAME_SIZE:
+        raise ProtocolError("Kích thước dữ liệu không hợp lệ.")
+    chunks = bytearray()
+    while len(chunks) < size:
+        part = sock.recv(size - len(chunks))
+        if not part:
+            raise ConnectionError("Đầu bên kia đã đóng kết nối.")
+        chunks.extend(part)
+    return bytes(chunks)
+
+
+def send_packet(sock: socket.socket, payload: bytes) -> None:
+    """Đóng gói frame bằng header 4 byte big-endian rồi gửi toàn bộ."""
+    if not payload or len(payload) > MAX_FRAME_SIZE:
+        raise ProtocolError("Frame rỗng hoặc vượt quá giới hạn cho phép.")
+    sock.sendall(struct.pack("!I", len(payload)) + payload)
+
+
+def recv_packet(sock: socket.socket) -> bytes:
+    """Đọc một frame theo header độ dài 4 byte."""
+    header = recv_exact(sock, 4)
+    (length,) = struct.unpack("!I", header)
+    if length <= 0 or length > MAX_FRAME_SIZE:
+        raise ProtocolError(f"Frame có kích thước bất thường: {length}.")
+    return recv_exact(sock, length)
+
+
+def safety_number(local_public: bytes, remote_public: bytes) -> str:
+    """Tạo Safety Number 30 chữ số từ hai public key đã sắp xếp theo bytes."""
+    first, second = sorted((local_public, remote_public))
+    digest = hashlib.sha256(first + second).digest()
+    number = int.from_bytes(digest, "big") % (10**30)
+    digits = f"{number:030d}"
+    return " ".join(digits[index : index + 5] for index in range(0, 30, 5))
+
+
+def derive_session_key(private_key: X25519PrivateKey, remote_public: bytes) -> bytes:
+    """Dùng X25519 rồi HKDF-SHA256 để dẫn xuất khóa AES-256."""
+    try:
+        peer_key = X25519PublicKey.from_public_bytes(remote_public)
+        shared_secret = private_key.exchange(peer_key)
+        return HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=None,
+            info=PROTOCOL_VERSION,
+        ).derive(shared_secret)
+    except Exception as exc:
+        raise ProtocolError(f"Không thể dẫn xuất khóa phiên: {exc}") from exc
+
+
+def encrypt_message(key: bytes, message: str) -> bytes:
+    plaintext = message.encode("utf-8")
+    if not plaintext or len(plaintext) > MAX_MESSAGE_BYTES:
+        raise ValueError("Tin nhắn phải có từ 1 đến 64 KiB UTF-8.")
+    nonce = os.urandom(12)
+    ciphertext = AESGCM(key).encrypt(nonce, plaintext, AAD_MESSAGE)
+    return bytes([PACKET_MESSAGE]) + nonce + ciphertext
+
+
+def decrypt_message(key: bytes, packet: bytes) -> str:
+    if len(packet) < 1 + 12 + 16 or packet[0] != PACKET_MESSAGE:
+        raise ProtocolError("Gói tin tin nhắn không hợp lệ.")
+    nonce = packet[1:13]
+    ciphertext = packet[13:]
+    if len(ciphertext) > MAX_MESSAGE_BYTES + 16:
+        raise ProtocolError("Tin nhắn nhận được vượt quá giới hạn.")
+    try:
+        plaintext = AESGCM(key).decrypt(nonce, ciphertext, AAD_MESSAGE)
+        return plaintext.decode("utf-8")
+    except Exception as exc:
+        raise ProtocolError(
+            "Xác thực AES-GCM thất bại; dữ liệu có thể đã bị sửa đổi hoặc sai khóa."
+        ) from exc
+
+
+def create_join_socket(onion_address: str) -> socks.socksocket:
+    """Kết nối tới onion service qua SOCKS5 với DNS được phân giải từ xa."""
+    address = onion_address.strip().lower()
+    if address.startswith("http://"):
+        address = address[7:]
+    elif address.startswith("https://"):
+        address = address[8:]
+    address = address.rstrip("/")
+    if ":" in address:
+        host, port_text = address.rsplit(":", 1)
+        try:
+            remote_port = int(port_text)
+        except ValueError as exc:
+            raise ValueError("Cổng onion không hợp lệ.") from exc
+    else:
+        host, remote_port = address, HIDDEN_SERVICE_PORT
+    if not host.endswith(".onion") or len(host) < len("a.onion"):
+        raise ValueError("Địa chỉ phải có dạng <ten>.onion.")
+    if not (1 <= remote_port <= 65535):
+        raise ValueError("Cổng onion phải nằm trong khoảng 1-65535.")
+
+    connection = socks.socksocket(socket.AF_INET, socket.SOCK_STREAM)
+    connection.set_proxy(
+        proxy_type=socks.SOCKS5,
+        addr=SOCKS_HOST,
+        port=SOCKS_PORT,
+        rdns=True,
+    )
+    connection.settimeout(CONNECT_TIMEOUT)
+    connection.connect((host, remote_port))
+    connection.settimeout(None)
+    return connection
+
+
+class ChatSession:
+    """Một phiên chat sau khi handshake và Safety Number đã được xác nhận."""
+
+    def __init__(self, connection: socket.socket, is_host: bool) -> None:
+        self.connection = connection
+        self.is_host = is_host
+        self.private_key = X25519PrivateKey.generate()
+        self.local_public = self.private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        self.session_key: Optional[bytes] = None
+        self.stop_event = threading.Event()
+        self.send_lock = threading.Lock()
+        self.receiver_thread: Optional[threading.Thread] = None
+
+    def _send(self, payload: bytes) -> None:
+        with self.send_lock:
+            send_packet(self.connection, payload)
+
+    def handshake_and_confirm(self) -> None:
+        """Trao đổi public key, hiển thị Safety Number và xác nhận hai phía."""
+        self.connection.settimeout(CONFIRM_TIMEOUT)
+        self._send(bytes([PACKET_HANDSHAKE]) + self.local_public)
+        remote_packet = recv_packet(self.connection)
+        if (
+            len(remote_packet) != 1 + 32
+            or remote_packet[0] != PACKET_HANDSHAKE
+        ):
+            raise ProtocolError("Handshake nhận được không hợp lệ.")
+        remote_public = remote_packet[1:]
+        self.session_key = derive_session_key(self.private_key, remote_public)
+        number = safety_number(self.local_public, remote_public)
+
+        safe_print("\n" + "=" * 68)
+        safe_print("SAFETY NUMBER - HÃY ĐỐI CHIẾU NGOÀI BĂNG VỚI BẠN CHAT")
+        safe_print(f"        {number}")
+        safe_print("=" * 68)
+        answer = input("Safety Number đúng và đã được đối chiếu? [y/N]: ").strip().lower()
+        local_confirmed = answer == "y"
+        self._send(bytes([PACKET_CONFIRM, ord("y") if local_confirmed else ord("n")]))
+
+        remote_confirm = recv_packet(self.connection)
+        if (
+            len(remote_confirm) != 2
+            or remote_confirm[0] != PACKET_CONFIRM
+            or remote_confirm[1] not in (ord("y"), ord("n"))
+        ):
+            raise ProtocolError("Phản hồi xác nhận Safety Number không hợp lệ.")
+        remote_confirmed = remote_confirm[1] == ord("y")
+
+        if not local_confirmed or not remote_confirmed:
+            raise PermissionError(
+                "Safety Number chưa được cả hai phía xác nhận; kết nối đã bị đóng."
+            )
+        self.connection.settimeout(None)
+        safe_print("[+] Safety Number đã được cả hai phía xác nhận.")
+
+    def start_receiver(self) -> None:
+        self.receiver_thread = threading.Thread(
+            target=self._receiver_loop,
+            name="cloakchat-receiver",
+            daemon=True,
+        )
+        self.receiver_thread.start()
+
+    def _receiver_loop(self) -> None:
+        try:
+            while not self.stop_event.is_set():
+                packet = recv_packet(self.connection)
+                if packet[0] == PACKET_MESSAGE:
+                    if self.session_key is None:
+                        raise ProtocolError("Chưa có khóa phiên.")
+                    message = decrypt_message(self.session_key, packet)
+                    safe_print(f"\n[Peer] {message}")
+                    safe_print("[Bạn] ",)
+                elif packet == bytes([PACKET_CLOSE]):
+                    safe_print("\n[!] Peer đã đóng phiên chat.")
+                    break
+                else:
+                    raise ProtocolError("Nhận được loại packet không được phép.")
+        except socket.timeout:
+            if not self.stop_event.is_set():
+                safe_print("\n[!] Hết thời gian chờ kết nối.")
+        except (ConnectionError, OSError):
+            if not self.stop_event.is_set():
+                safe_print("\n[!] Kết nối mạng đã đóng.")
+        except ProtocolError as exc:
+            if not self.stop_event.is_set():
+                safe_print(f"\n[!] Lỗi giao thức/bảo mật: {exc}")
+        finally:
+            self.stop_event.set()
+
+    def send_text(self, message: str) -> None:
+        if self.session_key is None:
+            raise RuntimeError("Phiên chưa hoàn tất handshake.")
+        self._send(encrypt_message(self.session_key, message))
+
+    def close(self, notify_peer: bool = True) -> None:
+        if self.stop_event.is_set():
+            notify_peer = False
+        self.stop_event.set()
+        if notify_peer:
+            try:
+                self._send(bytes([PACKET_CLOSE]))
+            except Exception:
+                pass
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            self.connection.close()
+        except OSError:
+            pass
+        if (
+            self.receiver_thread is not None
+            and self.receiver_thread.is_alive()
+            and self.receiver_thread is not threading.current_thread()
+        ):
+            self.receiver_thread.join(timeout=2)
+
+
+def close_active_resources() -> None:
+    """Dọn dẹp idempotent khi gõ exit, Ctrl+C hoặc interpreter kết thúc."""
+    global _ACTIVE_DAEMON, _ACTIVE_SESSION, _ACTIVE_LISTENER
+    _SHUTDOWN.set()
+    if _ACTIVE_SESSION is not None:
+        try:
+            _ACTIVE_SESSION.close()
+        except Exception:
+            pass
+        _ACTIVE_SESSION = None
+    if _ACTIVE_LISTENER is not None:
+        try:
+            _ACTIVE_LISTENER.close()
+        except Exception:
+            pass
+        _ACTIVE_LISTENER = None
+    if _ACTIVE_DAEMON is not None:
+        try:
+            _ACTIVE_DAEMON.stop()
+        except Exception:
+            pass
+        _ACTIVE_DAEMON = None
+
+
+def install_signal_handlers() -> None:
+    """Chuyển SIGINT/SIGTERM thành sự kiện dừng và cleanup bình thường."""
+    def handler(signum: int, _frame: object) -> None:
+        safe_print(f"\n[!] Nhận tín hiệu {signum}; đang dọn dẹp...")
+        close_active_resources()
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, handler)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, handler)
+
+
+def accept_host_connection(listener: socket.socket) -> socket.socket:
+    """Chờ kết nối inbound từ Tor, cho phép thoát sạch bằng Ctrl+C."""
+    listener.settimeout(1.0)
+    safe_print("[*] Đang chờ peer kết nối qua onion service...")
+    while not _SHUTDOWN.is_set():
+        try:
+            connection, address = listener.accept()
+            safe_print(f"[+] Đã nhận kết nối Tor từ {address[0]}.")
+            return connection
+        except socket.timeout:
+            continue
+    raise KeyboardInterrupt
+
+
+def run_chat(connection: socket.socket, is_host: bool) -> None:
+    global _ACTIVE_SESSION
+    session = ChatSession(connection, is_host=is_host)
+    _ACTIVE_SESSION = session
+    try:
+        session.handshake_and_confirm()
+        session.start_receiver()
+        safe_print("\n[*] Chat đã bắt đầu. Gõ tin nhắn và nhấn Enter; gõ 'exit' để thoát.")
+        while not session.stop_event.is_set():
+            try:
+                text = input("[Bạn] ")
+            except EOFError:
+                text = "exit"
+            if text.strip().lower() == "exit":
+                break
+            if not text:
+                continue
+            try:
+                session.send_text(text)
+            except (ConnectionError, OSError) as exc:
+                safe_print(f"[!] Không thể gửi tin nhắn: {exc}")
+                break
+    finally:
+        session.close(notify_peer=True)
+        _ACTIVE_SESSION = None
+
+
+def run_host(daemon: TorDaemon) -> None:
+    global _ACTIVE_LISTENER
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    _ACTIVE_LISTENER = listener
+    try:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((SOCKS_HOST, 0))
+        internal_port = listener.getsockname()[1]
+        listener.listen(1)
+        onion = daemon.create_ephemeral_service(internal_port)
+        safe_print("\n[HOST] Onion address của bạn:")
+        safe_print(f"        {onion}")
+        safe_print(
+            "[HOST] Hãy gửi địa chỉ này cho peer qua kênh an toàn, rồi chờ kết nối."
+        )
+        connection = accept_host_connection(listener)
+        try:
+            run_chat(connection, is_host=True)
+        finally:
+            try:
+                connection.close()
+            except OSError:
+                pass
+    finally:
+        listener.close()
+        _ACTIVE_LISTENER = None
+
+
+def run_join(daemon: TorDaemon) -> None:
+    onion = input("Nhập địa chỉ .onion của Host: ").strip()
+    safe_print("[*] Đang kết nối tới onion service qua SOCKS5 Tor...")
+    connection = create_join_socket(onion)
+    try:
+        run_chat(connection, is_host=False)
+    finally:
+        try:
+            connection.close()
+        except OSError:
+            pass
+
+
+def print_dependencies() -> None:
+    safe_print(
+        "\nYêu cầu: Python 3.9+, tor.exe, stem, cryptography và PySocks. "
+        "Tor phải là bản phân phối đáng tin cậy."
+    )
+
+
+def main() -> int:
+    global _ACTIVE_DAEMON
+    print(BANNER)
+    print_dependencies()
+    install_signal_handlers()
+    atexit.register(close_active_resources)
+
+    try:
+        while True:
+            safe_print("\n[1] Host - tạo onion service tạm thời")
+            safe_print("[2] Join - kết nối vào onion service")
+            safe_print("[3] Thoát")
+            choice = input("Lựa chọn: ").strip()
+            if choice == "3":
+                return 0
+            if choice not in ("1", "2"):
+                safe_print("[!] Lựa chọn không hợp lệ.")
+                continue
+
+            _SHUTDOWN.clear()
+            daemon = TorDaemon()
+            _ACTIVE_DAEMON = daemon
+            try:
+                daemon.start()
+                if choice == "1":
+                    run_host(daemon)
+                else:
+                    run_join(daemon)
+            except PermissionError as exc:
+                safe_print(f"[!] {exc}")
+            except KeyboardInterrupt:
+                safe_print("\n[*] Đã hủy phiên.")
+            except (ConnectionError, TimeoutError, OSError, ValueError, RuntimeError) as exc:
+                safe_print(f"[!] Không thể hoàn tất phiên: {exc}")
+            finally:
+                close_active_resources()
+                safe_print("[*] Tài nguyên Tor và dữ liệu tạm đã được dọn dẹp.")
+    except (KeyboardInterrupt, EOFError):
+        safe_print("\n[*] Đang thoát CloakChat...")
+        return 0
+    except Exception as exc:
+        safe_print(f"[!] Lỗi không mong muốn: {exc}")
+        return 1
+    finally:
+        close_active_resources()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+__all__ = [
+    "ChatSession",
+    "TorDaemon",
+    "create_join_socket",
+    "decrypt_message",
+    "derive_session_key",
+    "encrypt_message",
+    "main",
+    "recv_packet",
+    "safety_number",
+    "send_packet",
+]
+
+
+# End of CloakChat.py
