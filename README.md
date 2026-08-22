@@ -76,7 +76,7 @@ Nếu bạn đã chạy sai các lệnh trước đó và thấy `.venv/bin/acti
 
 ## Cách sử dụng
 
-Chọn `Host` để tạo địa chỉ `.onion`, sau đó gửi địa chỉ này cho người còn lại qua một kênh phù hợp. Người kia chọn `Join` và nhập địa chỉ `.onion`.
+Chọn `Host` để tạo địa chỉ `.onion`, sau đó gửi địa chỉ này cho người còn lại qua một kênh phù hợp. Sau dòng `[+] Tor daemon đã sẵn sàng.`, chương trình sẽ hiện `[ * ] Tor đã chạy...` và chờ tối đa 180 giây để Tor bootstrap rồi công bố onion service. Đây là trạng thái bình thường; chỉ khi xuất hiện lỗi timeout hoặc thông báo Bootstrap thất bại thì phiên mới có vấn đề. Người kia chọn `Join` và nhập địa chỉ `.onion` sau khi địa chỉ được hiển thị.
 
 Sau handshake, cả hai phía sẽ hiển thị cùng một **Safety Number**. Hai người phải đối chiếu số này qua một kênh tin cậy bên ngoài và chỉ nhập `y` khi số trùng khớp. Nếu một phía nhập khác `y`, kết nối sẽ bị từ chối.
 

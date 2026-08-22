@@ -71,6 +71,7 @@ CONTROL_PORT = 9051
 HIDDEN_SERVICE_PORT = 80
 CONNECT_TIMEOUT = 30.0
 CONFIRM_TIMEOUT = 180.0
+ONION_PUBLICATION_TIMEOUT = 180.0
 MAX_FRAME_SIZE = 1_048_576
 MAX_MESSAGE_BYTES = 64 * 1024
 
@@ -275,15 +276,28 @@ class TorDaemon:
         """Tạo onion service tạm thời, ánh xạ cổng onion 80 vào localhost."""
         if self.controller is None:
             raise RuntimeError("Tor controller chưa được khởi tạo.")
+
+        safe_print(
+            "[*] Tor đã chạy. Đang chờ mạng Tor và công bố địa chỉ .onion "
+            f"(tối đa {ONION_PUBLICATION_TIMEOUT:.0f} giây)..."
+        )
         try:
             service = self.controller.create_ephemeral_hidden_service(
                 {HIDDEN_SERVICE_PORT: internal_port},
                 key_type="NEW",
                 key_content="ED25519-V3",
                 await_publication=True,
+                timeout=ONION_PUBLICATION_TIMEOUT,
             )
         except Exception as exc:
-            raise RuntimeError(f"Không thể tạo onion service tạm thời: {exc}") from exc
+            try:
+                bootstrap = self.controller.get_info("status/bootstrap-phase")
+            except Exception:
+                bootstrap = "không đọc được trạng thái bootstrap"
+            raise RuntimeError(
+                "Không thể công bố onion service. "
+                f"Bootstrap: {bootstrap}. Chi tiết: {exc}"
+            ) from exc
         self.service_id = str(service.service_id)
         return f"{self.service_id}.onion"
 
