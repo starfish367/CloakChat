@@ -1,0 +1,4 @@
+# cryptography được cài bằng: pkg install python-cryptography
+# Không cài cryptography từ pip trên Termux.
+stem>=1.8,<2
+PySocks>=1.7,<2

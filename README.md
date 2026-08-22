@@ -42,20 +42,26 @@ CLOAKCHAT_TOR_EXECUTABLE=/usr/bin/tor python3 CloakChat.py
 
 ## Cài đặt trên Android bằng Termux
 
-Cài Termux từ nguồn đáng tin cậy, mở Termux và chạy:
+Cài Termux từ nguồn đáng tin cậy, mở Termux và clone repository. **Không dùng `sudo`, `apt` của Ubuntu hoặc `pip install --upgrade pip` trong Termux.** Termux dùng `pkg` để quản lý Python và các thư viện native.
 
 ```bash
 pkg update -y
-pkg install -y python tor git
-pip install -r requirements.txt
+pkg upgrade -y
+pkg install -y git
+
+git clone https://github.com/starfish367/CloakChat.git ~/CloakChat
+cd ~/CloakChat
+bash android/install-termux.sh
+python CloakChat.py
 ```
 
-Clone repository và chạy:
+Script `android/install-termux.sh` sẽ cài `python`, `tor` và `python-cryptography` bằng `pkg`, sau đó chỉ cài `stem` và `PySocks` bằng pip. Cách này tránh lỗi `Rust not found`, lỗi build `maturin` và lỗi `Installing pip is forbidden` của Termux.
+
+Nếu muốn chạy từng bước thủ công:
 
 ```bash
-git clone https://github.com/starfish367/CloakChat.git
-cd CloakChat
-bash android/install-termux.sh
+pkg install -y python tor python-cryptography
+python -m pip install -r requirements-termux.txt
 python CloakChat.py
 ```
 
@@ -66,7 +72,7 @@ which tor
 CLOAKCHAT_TOR_EXECUTABLE="$(which tor)" python CloakChat.py
 ```
 
-Android có thể hạn chế tiến trình nền. Vì vậy nên giữ Termux ở trạng thái hoạt động trong suốt phiên chat và cấp quyền mạng khi hệ điều hành yêu cầu.
+Nếu bạn đã chạy sai các lệnh trước đó và thấy `.venv/bin/activate` không tồn tại, không cần tạo virtual environment trong Termux; chỉ cần cài lại bằng script ở trên. Android có thể hạn chế tiến trình nền, vì vậy nên giữ Termux ở trạng thái hoạt động trong suốt phiên chat và cấp quyền mạng khi hệ điều hành yêu cầu.
 
 ## Cách sử dụng
 
