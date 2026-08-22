@@ -19,9 +19,11 @@ CloakChat là ứng dụng chat P2P ẩn danh hai người qua mạng Tor. Phiê
 
 ## Cài đặt trên PC Linux
 
-Cần Python 3.9 trở lên và một bản Tor đáng tin cậy từ kho phân phối. Trên Debian/Ubuntu:
+Cần Python 3.9 trở lên và một bản Tor đáng tin cậy từ kho phân phối. Trước hết clone repository rồi chuyển vào đúng thư mục dự án:
 
 ```bash
+git clone https://github.com/starfish367/CloakChat.git
+cd CloakChat
 sudo apt update
 sudo apt install -y tor python3 python3-venv python3-pip
 python3 -m venv .venv
@@ -29,6 +31,8 @@ python3 -m venv .venv
 python -m pip install -r requirements.txt
 python CloakChat.py
 ```
+
+Lỗi `Could not open requirements file` hoặc `can't open file CloakChat.py` xảy ra khi chạy các lệnh cài đặt từ thư mục home thay vì thư mục `CloakChat`. Nếu đã clone trước đó, chỉ cần chạy `cd ~/CloakChat` rồi tiếp tục từ bước tạo virtual environment.
 
 CloakChat tự tìm `tor` trong `PATH`. Có thể chỉ rõ đường dẫn bằng biến môi trường:
 
@@ -51,6 +55,7 @@ Clone repository và chạy:
 ```bash
 git clone https://github.com/starfish367/CloakChat.git
 cd CloakChat
+bash android/install-termux.sh
 python CloakChat.py
 ```
 

@@ -12,10 +12,13 @@ Phụ thuộc:
 Cấu trúc khi chạy từ mã nguồn:
     CloakChat.py
     tor_bin/
-        tor.exe
+        tor.exe  # Windows; Linux/Android dùng tor trong PATH hoặc PREFIX/bin
 
 Ví dụ đóng gói trên Windows:
     pyinstaller --onefile --console --add-binary "tor_bin/tor.exe;tor_bin" CloakChat.py
+
+Trên Linux, Tor được tìm trong PATH. Trên Android, có thể cài Tor bằng Termux
+và mã nguồn sẽ tự tìm binary trong PREFIX/bin.
 
 Lưu ý an toàn quan trọng:
     Safety Number phải được hai người đối chiếu qua một kênh tin cậy khác
@@ -145,11 +148,22 @@ def resolve_tor_executable() -> Path:
     )
 
 
-def wait_for_tcp_port(host: str, port: int, timeout: float) -> None:
-    """Chờ một cổng TCP sẵn sàng, hết thời gian thì ném TimeoutError."""
+def wait_for_tcp_port(
+    host: str,
+    port: int,
+    timeout: float,
+    process: Optional[subprocess.Popen[bytes]] = None,
+    diagnostic=None,
+) -> None:
+    """Chờ cổng TCP; báo sớm nếu Tor đã thoát và kèm log chẩn đoán."""
     deadline = time.monotonic() + timeout
     last_error: Optional[Exception] = None
     while time.monotonic() < deadline and not _SHUTDOWN.is_set():
+        if process is not None and process.poll() is not None:
+            details = diagnostic() if diagnostic is not None else "Không có log."
+            raise RuntimeError(
+                f"Tor đã thoát với mã {process.returncode}. Log Tor:\n{details}"
+            )
         probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         probe.settimeout(0.5)
         try:
@@ -174,7 +188,20 @@ class TorDaemon:
         self.controller: Optional[Controller] = None
         self.data_dir: Optional[Path] = None
         self.service_id: Optional[str] = None
+        self.log_path: Optional[Path] = None
+        self.log_handle = None
         self._stopped = False
+
+    def _diagnostic_log(self) -> str:
+        """Đọc phần cuối log Tor để hiển thị nguyên nhân khi daemon thất bại."""
+        if self.log_path is None or not self.log_path.is_file():
+            return "Tor không tạo được log chẩn đoán."
+        try:
+            text = self.log_path.read_text(encoding="utf-8", errors="replace")
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            return "\n".join(lines[-12:]) or "Log Tor trống."
+        except OSError as exc:
+            return f"Không đọc được log Tor: {exc}"
 
     def start(self) -> None:
         if self.process is not None:
@@ -182,6 +209,8 @@ class TorDaemon:
 
         tor_executable = resolve_tor_executable()
         self.data_dir = Path(tempfile.mkdtemp(prefix="cloakchat_tor_"))
+        self.log_path = self.data_dir / "tor.log"
+        self.log_handle = self.log_path.open("ab")
         command = [
             str(tor_executable),
             "--DataDirectory",
@@ -208,21 +237,38 @@ class TorDaemon:
             self.process = subprocess.Popen(
                 command,
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=self.log_handle,
+                stderr=self.log_handle,
                 startupinfo=startupinfo,
                 creationflags=creationflags,
                 close_fds=(os.name != "nt"),
             )
-            wait_for_tcp_port(CONTROL_HOST, CONTROL_PORT, CONNECT_TIMEOUT)
-            wait_for_tcp_port(SOCKS_HOST, SOCKS_PORT, CONNECT_TIMEOUT)
+            wait_for_tcp_port(
+                CONTROL_HOST,
+                CONTROL_PORT,
+                CONNECT_TIMEOUT,
+                process=self.process,
+                diagnostic=self._diagnostic_log,
+            )
+            wait_for_tcp_port(
+                SOCKS_HOST,
+                SOCKS_PORT,
+                CONNECT_TIMEOUT,
+                process=self.process,
+                diagnostic=self._diagnostic_log,
+            )
             self.controller = Controller.from_port(
                 address=CONTROL_HOST, port=CONTROL_PORT
             )
             self.controller.authenticate()
             safe_print("[+] Tor daemon đã sẵn sàng.")
-        except Exception:
+        except Exception as exc:
+            details = self._diagnostic_log()
             self.stop()
+            if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+                raise RuntimeError(
+                    f"Tor không khởi động được hoặc không mở đủ cổng. Log Tor:\n{details}"
+                ) from exc
             raise
 
     def create_ephemeral_service(self, internal_port: int) -> str:
@@ -283,9 +329,17 @@ class TorDaemon:
                 pass
             self.process = None
 
+        if self.log_handle is not None:
+            try:
+                self.log_handle.close()
+            except Exception:
+                pass
+            self.log_handle = None
+
         if self.data_dir is not None:
             shutil.rmtree(self.data_dir, ignore_errors=True)
             self.data_dir = None
+        self.log_path = None
 
 
 class ProtocolError(Exception):
