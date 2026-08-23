@@ -28,7 +28,7 @@ if str(PROJECT_DIR) not in sys.path:
 from kivy.app import App
 from kivy.core.clipboard import Clipboard
 from kivy.clock import Clock
-from kivy.graphics import Color, RoundedRectangle
+from kivy.graphics import Color, Rectangle, RoundedRectangle
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
@@ -252,18 +252,34 @@ class CloakChatGUI(App):
             Window.clearcolor = (0.035, 0.055, 0.09, 1)
             Window.minimum_width = dp(420)
             Window.minimum_height = dp(640)
+            desktop_layout = Window.width >= dp(760)
         except Exception:
-            pass
+            desktop_layout = True
 
         root = BoxLayout(
-            orientation="vertical",
-            padding=[dp(16), dp(14)],
-            spacing=dp(10),
+            orientation="horizontal" if desktop_layout else "vertical",
+            padding=0,
+            spacing=0,
         )
+
+        sidebar = BoxLayout(
+            orientation="vertical",
+            padding=[dp(14), dp(14)],
+            spacing=dp(8),
+            size_hint_x=None if desktop_layout else 1,
+            size_hint_y=1 if desktop_layout else None,
+            width=dp(310) if desktop_layout else 1,
+            height=1 if desktop_layout else dp(315),
+        )
+        with sidebar.canvas.before:
+            Color(0.045, 0.065, 0.105, 1)
+            sidebar_bg = Rectangle(pos=sidebar.pos, size=sidebar.size)
+        sidebar.bind(pos=lambda w, p: setattr(sidebar_bg, "pos", w.pos))
+        sidebar.bind(size=lambda w, s: setattr(sidebar_bg, "size", w.size))
 
         header = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
         self.title_label = Label(
-            text="[b]CloakChat[/b]\n[size=12][color=#93A4C3]RIÊNG TƯ • MÃ HÓA • TRỰC TIẾP[/color][/size]",
+            text="[b]CloakChat[/b]\n[size=11][color=#93A4C3]RIÊNG TƯ • MÃ HÓA • TRỰC TIẾP[/color][/size]",
             markup=True,
             halign="left",
             valign="middle",
@@ -274,56 +290,53 @@ class CloakChatGUI(App):
             text="Tiếng Việt",
             values=("Tiếng Việt", "English"),
             size_hint_x=None,
-            width=dp(112),
-            height=dp(36),
+            width=dp(98),
             background_normal="",
             background_color=(0.12, 0.18, 0.28, 1),
             color=(0.92, 0.95, 1, 1),
         )
         self.language_spinner.bind(text=lambda _spinner, value: self.set_language("en" if value == "English" else "vi"))
         header.add_widget(self.language_spinner)
+        sidebar.add_widget(header)
+
         self.security_badge = Label(
             text="●  E2EE\n[size=11]READY[/size]",
             markup=True,
             color=(0.35, 0.92, 0.68, 1),
-            halign="center",
+            halign="left",
             valign="middle",
-            size_hint_x=None,
-            width=dp(82),
+            size_hint_y=None,
+            height=dp(40),
         )
         self.security_badge.bind(size=self._sync_text_size)
-        header.add_widget(self.security_badge)
-        root.add_widget(header)
+        sidebar.add_widget(self.security_badge)
 
         connection_card = BoxLayout(
             orientation="vertical",
-            padding=[dp(12), dp(10)],
-            spacing=dp(7),
+            padding=[dp(10), dp(9)],
+            spacing=dp(5),
             size_hint_y=None,
-            height=dp(312),
+            height=dp(218),
         )
         with connection_card.canvas.before:
             Color(0.07, 0.10, 0.16, 1)
             connection_bg = RoundedRectangle(pos=connection_card.pos, size=connection_card.size, radius=[dp(14)])
         connection_card.bind(pos=lambda w, p: setattr(connection_bg, "pos", w.pos))
         connection_card.bind(size=lambda w, s: setattr(connection_bg, "size", w.size))
-
         self.connection_header = Label(
             text="[b]KẾT NỐI[/b]  [color=#93A4C3]Chọn cách kết nối[/color]",
             markup=True,
             halign="left",
             size_hint_y=None,
-            height=dp(23),
+            height=dp(21),
         )
         connection_card.add_widget(self.connection_header)
-        fields = GridLayout(cols=2, spacing=dp(6), size_hint_y=None, height=dp(150))
+        fields = GridLayout(cols=2, spacing=dp(5), size_hint_y=None, height=dp(112))
         self.network_label = Label(text="Mạng", color=(0.58, 0.65, 0.78, 1), halign="left")
         fields.add_widget(self.network_label)
         self.transport = Spinner(
             text=self._transport_value("LAN"),
             values=tuple(self._transport_value(key) for key in ("LAN", "PUBLIC", "TOR", "ORBOT")),
-            size_hint_y=None,
-            height=dp(42),
             background_normal="",
             background_color=(0.12, 0.18, 0.28, 1),
             color=(0.92, 0.95, 1, 1),
@@ -334,8 +347,6 @@ class CloakChatGUI(App):
         self.role = Spinner(
             text=self._role_value("HOST"),
             values=(self._role_value("HOST"), self._role_value("JOIN")),
-            size_hint_y=None,
-            height=dp(42),
             background_normal="",
             background_color=(0.12, 0.18, 0.28, 1),
             color=(0.92, 0.95, 1, 1),
@@ -348,8 +359,6 @@ class CloakChatGUI(App):
         self.group_mode_spinner = Spinner(
             text=self._group_mode_value("DIRECT"),
             values=tuple(self._group_mode_value(key) for key in ("DIRECT", "A", "B")),
-            size_hint_y=None,
-            height=dp(42),
             background_normal="",
             background_color=(0.12, 0.18, 0.28, 1),
             color=(0.92, 0.95, 1, 1),
@@ -361,187 +370,138 @@ class CloakChatGUI(App):
         self.security_level_spinner = Spinner(
             text=self._security_value("BALANCED"),
             values=tuple(self._security_value(key) for key in ("BALANCED", "STRICT")),
-            size_hint_y=None,
-            height=dp(42),
             background_normal="",
             background_color=(0.12, 0.18, 0.28, 1),
             color=(0.92, 0.95, 1, 1),
         )
         fields.add_widget(self.security_level_spinner)
         connection_card.add_widget(fields)
-
-        self.address = TextInput(
-            hint_text=self._t("address_join"),
-            multiline=False,
-            size_hint_y=None,
-            height=dp(43),
-            padding=[dp(12), dp(11)],
-            background_normal="",
-            background_color=(0.11, 0.15, 0.23, 1),
-            foreground_color=(0.92, 0.95, 1, 1),
-            hint_text_color=(0.45, 0.53, 0.67, 1),
-        )
-        connection_card.add_widget(self.address)
         self.nickname_input = TextInput(
             hint_text=self._t("nickname"),
             text="Anonymous",
             multiline=False,
             size_hint_y=None,
-            height=dp(40),
-            padding=[dp(12), dp(10)],
+            height=dp(36),
+            padding=[dp(10), dp(8)],
             background_normal="",
             background_color=(0.11, 0.15, 0.23, 1),
             foreground_color=(0.92, 0.95, 1, 1),
             hint_text_color=(0.45, 0.53, 0.67, 1),
         )
         connection_card.add_widget(self.nickname_input)
-        root.add_widget(connection_card)
+        self.address = TextInput(
+            hint_text=self._t("address_join"),
+            multiline=False,
+            size_hint_y=None,
+            height=dp(36),
+            padding=[dp(10), dp(8)],
+            background_normal="",
+            background_color=(0.11, 0.15, 0.23, 1),
+            foreground_color=(0.92, 0.95, 1, 1),
+            hint_text_color=(0.45, 0.53, 0.67, 1),
+        )
+        connection_card.add_widget(self.address)
+        sidebar.add_widget(connection_card)
 
-        action_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        action_row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
         self.start_button = Button(text=self._t("start"), background_normal="", background_color=(0.15, 0.63, 0.48, 1), bold=True)
         self.start_button.bind(on_press=self.start_connection)
         self.stop_button = Button(text=self._t("stop"), background_normal="", background_color=(0.55, 0.18, 0.23, 1), disabled=True)
         self.stop_button.bind(on_press=lambda *_: self.stop_connection())
         action_row.add_widget(self.start_button)
         action_row.add_widget(self.stop_button)
-        root.add_widget(action_row)
+        sidebar.add_widget(action_row)
 
-        tools = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
-        self.qr_button = Button(text=self._t("qr"), background_normal="", background_color=(0.12, 0.18, 0.28, 1), disabled=True)
+        tools = GridLayout(cols=3, spacing=dp(5), size_hint_y=None, height=dp(78))
+        button_style = dict(background_normal="", background_color=(0.12, 0.18, 0.28, 1), font_size=dp(11))
+        self.qr_button = Button(text=self._t("qr"), disabled=True, **button_style)
         self.qr_button.bind(on_press=lambda *_: self.show_qr())
-        self.bluetooth_button = Button(text=self._t("bluetooth"), background_normal="", background_color=(0.12, 0.18, 0.28, 1), disabled=True)
+        self.bluetooth_button = Button(text=self._t("bluetooth"), disabled=True, **button_style)
         self.bluetooth_button.bind(on_press=lambda *_: self.share_bluetooth())
-        self.contacts_button = Button(text=self._t("contacts"), background_normal="", background_color=(0.12, 0.18, 0.28, 1))
+        self.contacts_button = Button(text=self._t("contacts"), **button_style)
         self.contacts_button.bind(on_press=lambda *_: self.show_contacts())
-        self.voice_button = Button(text=self._t("voice"), background_normal="", background_color=(0.12, 0.18, 0.28, 1), disabled=True)
+        self.voice_button = Button(text=self._t("voice"), disabled=True, **button_style)
         self.voice_button.bind(on_press=lambda *_: self.toggle_voice())
-        self.file_button = Button(text=self._t("file"), background_normal="", background_color=(0.12, 0.18, 0.28, 1), disabled=True)
+        self.file_button = Button(text=self._t("file"), disabled=True, **button_style)
         self.file_button.bind(on_press=lambda *_: self.choose_file())
-        self.members_button = Button(text=self._t("members"), background_normal="", background_color=(0.12, 0.18, 0.28, 1), disabled=True)
+        self.members_button = Button(text=self._t("members"), disabled=True, **button_style)
         self.members_button.bind(on_press=lambda *_: self.show_group_members())
-        tools.add_widget(self.qr_button)
-        tools.add_widget(self.bluetooth_button)
-        tools.add_widget(self.contacts_button)
-        tools.add_widget(self.voice_button)
-        tools.add_widget(self.file_button)
-        tools.add_widget(self.members_button)
-        root.add_widget(tools)
-        settings_row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(8))
-        self.auto_delete_label = Label(text=self._t("auto_delete"), color=(0.58, 0.65, 0.78, 1), size_hint_x=None, width=dp(135))
+        for widget in (self.qr_button, self.bluetooth_button, self.contacts_button, self.voice_button, self.file_button, self.members_button):
+            tools.add_widget(widget)
+        sidebar.add_widget(tools)
+
+        settings_row = BoxLayout(size_hint_y=None, height=dp(32), spacing=dp(6))
+        self.auto_delete_label = Label(text=self._t("auto_delete"), color=(0.58, 0.65, 0.78, 1), size_hint_x=None, width=dp(110), font_size=dp(11))
         settings_row.add_widget(self.auto_delete_label)
         self.auto_delete_spinner = Spinner(
             text=self._t("auto_off"),
             values=(self._t("auto_off"), self._t("auto_30s"), self._t("auto_5m")),
             size_hint_x=None,
-            width=dp(125),
+            width=dp(105),
             background_normal="",
             background_color=(0.12, 0.18, 0.28, 1),
             color=(0.92, 0.95, 1, 1),
+            font_size=dp(11),
         )
         self.auto_delete_spinner.bind(text=lambda *_: self._auto_delete_changed())
         settings_row.add_widget(self.auto_delete_spinner)
-        root.add_widget(settings_row)
+        sidebar.add_widget(settings_row)
+        root.add_widget(sidebar)
 
-        self.connection_label = Label(
-            text=self._t("status_ready"),
-            color=(0.58, 0.65, 0.78, 1),
-            halign="left",
-            valign="middle",
-            size_hint_y=None,
-            height=dp(30),
-        )
+        content = BoxLayout(orientation="vertical", padding=[dp(14), dp(12)], spacing=dp(8), size_hint_x=1, size_hint_y=1)
+        self.connection_label = Label(text=self._t("status_ready"), color=(0.58, 0.65, 0.78, 1), halign="left", valign="middle", size_hint_y=None, height=dp(28))
         self.connection_label.bind(size=self._sync_text_size)
-        root.add_widget(self.connection_label)
+        content.add_widget(self.connection_label)
 
-        invite_row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
-        self.invite_address_label = Label(
-            text="",
-            color=(0.72, 0.80, 0.92, 1),
-            halign="left",
-            valign="middle",
-            shorten=True,
-            shorten_from="right",
-        )
+        invite_row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
+        self.invite_address_label = Label(text="", color=(0.72, 0.80, 0.92, 1), halign="left", valign="middle", shorten=True, shorten_from="right")
         self.invite_address_label.bind(size=self._sync_text_size)
-        self.copy_address_button = Button(
-            text=self._t("copy"),
-            size_hint_x=None,
-            width=dp(100),
-            background_normal="",
-            background_color=(0.12, 0.18, 0.28, 1),
-            disabled=True,
-        )
+        self.copy_address_button = Button(text=self._t("copy"), size_hint_x=None, width=dp(86), background_normal="", background_color=(0.12, 0.18, 0.28, 1), disabled=True, font_size=dp(11))
         self.copy_address_button.bind(on_press=lambda *_: self.copy_address())
-        self.share_address_button = Button(
-            text=self._t("share"),
-            size_hint_x=None,
-            width=dp(100),
-            background_normal="",
-            background_color=(0.12, 0.18, 0.28, 1),
-            disabled=True,
-        )
+        self.share_address_button = Button(text=self._t("share"), size_hint_x=None, width=dp(86), background_normal="", background_color=(0.12, 0.18, 0.28, 1), disabled=True, font_size=dp(11))
         self.share_address_button.bind(on_press=lambda *_: self.share_address())
         invite_row.add_widget(self.invite_address_label)
         invite_row.add_widget(self.copy_address_button)
         invite_row.add_widget(self.share_address_button)
-        root.add_widget(invite_row)
+        content.add_widget(invite_row)
 
-        chat_panel = BoxLayout(orientation="vertical", padding=[dp(10), dp(8)], spacing=dp(6), size_hint_y=1)
+        chat_panel = BoxLayout(orientation="vertical", padding=[dp(12), dp(10)], spacing=dp(6), size_hint_y=1)
         with chat_panel.canvas.before:
             Color(0.055, 0.08, 0.13, 1)
-            chat_bg = RoundedRectangle(pos=chat_panel.pos, size=chat_panel.size, radius=[dp(14)])
+            chat_bg = RoundedRectangle(pos=chat_panel.pos, size=chat_panel.size, radius=[dp(16)])
         chat_panel.bind(pos=lambda w, p: setattr(chat_bg, "pos", w.pos))
         chat_panel.bind(size=lambda w, s: setattr(chat_bg, "size", w.size))
         self.chat_title = Label(text="[b]TIN NHẮN[/b]  [color=#93A4C3]Kênh E2EE[/color]", markup=True, halign="left", size_hint_y=None, height=dp(25))
         chat_panel.add_widget(self.chat_title)
-        scroll = ScrollView()
-        self.chat_log = TextInput(
-            readonly=True,
-            multiline=True,
-            size_hint_y=None,
-            padding=[dp(8), dp(8)],
-            background_normal="",
-            background_color=(0.04, 0.06, 0.10, 1),
-            foreground_color=(0.82, 0.88, 0.96, 1),
-            cursor_color=(0, 0, 0, 0),
-            font_size=dp(16),
-            line_height=1.25,
-        )
+        scroll = ScrollView(do_scroll_x=False)
+        self.chat_log = TextInput(readonly=True, multiline=True, size_hint_y=None, padding=[dp(14), dp(12)], background_normal="", background_color=(0.04, 0.06, 0.10, 1), foreground_color=(0.86, 0.90, 0.97, 1), cursor_color=(0, 0, 0, 0), font_size=dp(16), line_height=1.35)
         self.chat_log.bind(minimum_height=self.chat_log.setter("height"))
         scroll.add_widget(self.chat_log)
         chat_panel.add_widget(scroll)
-        root.add_widget(chat_panel)
+        content.add_widget(chat_panel)
 
-        reaction_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
-        self.reaction_label = Label(text=self._t("reaction"), color=(0.58, 0.65, 0.78, 1), size_hint_x=None, width=dp(74))
+        reaction_row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(5))
+        self.reaction_label = Label(text=self._t("reaction"), color=(0.58, 0.65, 0.78, 1), size_hint_x=None, width=dp(72), font_size=dp(11))
         reaction_row.add_widget(self.reaction_label)
         for emoji in ("👍", "❤️", "😂", "😮", "🎉"):
             reaction_button = Button(text=emoji, font_size=dp(20), background_normal="", background_color=(0.12, 0.18, 0.28, 1), disabled=True)
             reaction_button.bind(on_press=lambda _btn, value=emoji: self.send_reaction(value))
             reaction_row.add_widget(reaction_button)
         self.reaction_buttons = reaction_row.children[0:5]
-        root.add_widget(reaction_row)
+        content.add_widget(reaction_row)
 
-        compose = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(8))
-        self.message_input = TextInput(
-            hint_text=self._t("message_hint"),
-            multiline=False,
-            disabled=True,
-            padding=[dp(12), dp(13)],
-            background_normal="",
-            background_color=(0.11, 0.15, 0.23, 1),
-            foreground_color=(0.92, 0.95, 1, 1),
-            hint_text_color=(0.45, 0.53, 0.67, 1),
-        )
+        compose = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(7))
+        self.message_input = TextInput(hint_text=self._t("message_hint"), multiline=False, disabled=True, padding=[dp(14), dp(13)], background_normal="", background_color=(0.11, 0.15, 0.23, 1), foreground_color=(0.92, 0.95, 1, 1), hint_text_color=(0.45, 0.53, 0.67, 1))
         self.message_input.bind(on_text_validate=self.send_message)
-        self.reply_button = Button(text=self._t("reply"), size_hint_x=None, width=dp(86), disabled=True, background_normal="", background_color=(0.12, 0.18, 0.28, 1))
+        self.reply_button = Button(text=self._t("reply"), size_hint_x=None, width=dp(78), disabled=True, background_normal="", background_color=(0.12, 0.18, 0.28, 1), font_size=dp(11))
         self.reply_button.bind(on_press=lambda *_: self._prepare_reply())
-        self.send_button = Button(text=self._t("send"), size_hint_x=None, width=dp(74), disabled=True, background_normal="", background_color=(0.15, 0.63, 0.48, 1), bold=True)
+        self.send_button = Button(text=self._t("send"), size_hint_x=None, width=dp(76), disabled=True, background_normal="", background_color=(0.15, 0.63, 0.48, 1), bold=True)
         self.send_button.bind(on_press=self.send_message)
         compose.add_widget(self.reply_button)
         compose.add_widget(self.message_input)
         compose.add_widget(self.send_button)
-        root.add_widget(compose)
+        content.add_widget(compose)
+        root.add_widget(content)
 
         self._append_log(self._t("log_ready"))
         atexit.register(self.stop_connection)
