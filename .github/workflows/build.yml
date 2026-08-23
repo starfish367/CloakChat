@@ -124,10 +124,14 @@ jobs:
 
       - name: Build debug APK with retry
         run: |
-          . .venv-buildozer/bin/activate
-          # Buildozer/p4a có thể hỏi license khi cài build-tools; CI phải
-          # cấp phép không tương tác để tránh lỗi "Aidl not found".
-          # Retry giúp vượt lỗi HTTP 502 tạm thời khi tải SDK/NDK/source.
+          # GitHub Actions chạy bash với -e -o pipefail mặc định. Đặt phần
+          # `yes | buildozer` trong script riêng để SIGPIPE của yes không làm
+          # dừng sớm vòng retry.
+          cat > /tmp/build_android_retry.sh <<'SCRIPT'
+          #!/usr/bin/env bash
+          set +e
+          set +o pipefail
+          source .venv-buildozer/bin/activate
           attempt=1
           rc=1
           while [ "$attempt" -le 3 ]; do
@@ -142,6 +146,8 @@ jobs:
             attempt=$((attempt + 1))
           done
           exit "$rc"
+          SCRIPT
+          bash /tmp/build_android_retry.sh
 
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
