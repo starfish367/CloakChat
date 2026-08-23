@@ -36,6 +36,8 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install -r requirements-gui.txt
 
+      - name: Run protocol tests
+        run: python -m unittest discover -s tests -v
       - name: Build Linux executable
         run: python -m PyInstaller --clean --noconfirm CloakChatGUI.spec
 
@@ -63,6 +65,8 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install -r requirements-gui.txt
 
+      - name: Run protocol tests
+        run: python -m unittest discover -s tests -v
       - name: Build Windows executable
         run: python -m PyInstaller --clean --noconfirm CloakChatGUI.spec
 
@@ -107,14 +111,37 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install buildozer cython
 
-      - name: Build debug APK
+      - name: Cache Android toolchains
+        uses: actions/cache@v4
+        with:
+          path: |
+            .buildozer
+            ~/.buildozer
+            ~/.gradle/caches
+          key: cloakchat-android-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            cloakchat-android-${{ runner.os }}-
+
+      - name: Build debug APK with retry
         run: |
           . .venv-buildozer/bin/activate
           # Buildozer/p4a có thể hỏi license khi cài build-tools; CI phải
           # cấp phép không tương tác để tránh lỗi "Aidl not found".
-          # Không dùng pipefail ở đây vì `yes` có thể nhận SIGPIPE sau khi
-          # Buildozer kết thúc thành công.
-          yes | buildozer -v android debug
+          # Retry giúp vượt lỗi HTTP 502 tạm thời khi tải SDK/NDK/source.
+          attempt=1
+          rc=1
+          while [ "$attempt" -le 3 ]; do
+            echo "Android build attempt $attempt/3"
+            yes | buildozer -v android debug
+            rc=${PIPESTATUS[1]}
+            if [ "$rc" -eq 0 ]; then
+              exit 0
+            fi
+            echo "Buildozer thất bại với mã $rc; chờ trước khi thử lại..."
+            sleep $((attempt * 20))
+            attempt=$((attempt + 1))
+          done
+          exit "$rc"
 
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
