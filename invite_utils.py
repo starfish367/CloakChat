@@ -14,8 +14,8 @@ INVITE_VERSION = 1
 
 def create_invite(transport: str, address: str, display_name: str = "") -> str:
     """Tạo payload ngắn, có checksum; tuyệt đối không chứa khóa bí mật."""
-    if transport not in ("lan", "tor"):
-        raise ValueError("transport phải là lan hoặc tor")
+    if transport not in ("lan", "public", "tor"):
+        raise ValueError("transport phải là lan, public hoặc tor")
     address = address.strip()
     if not address or len(address) > 255:
         raise ValueError("Địa chỉ invite không hợp lệ")
@@ -43,7 +43,7 @@ def parse_invite(payload: str) -> Dict[str, str]:
         body = json.loads(base64.urlsafe_b64decode(encoded).decode("utf-8"))
     except Exception as exc:
         raise ValueError("Invite bị hỏng hoặc không hợp lệ") from exc
-    if body.get("v") != INVITE_VERSION or body.get("transport") not in ("lan", "tor"):
+    if body.get("v") != INVITE_VERSION or body.get("transport") not in ("lan", "public", "tor"):
         raise ValueError("Phiên bản hoặc transport invite không được hỗ trợ")
     checksum = body.pop("checksum", None)
     canonical = json.dumps(body, ensure_ascii=False, separators=(",", ":"))

@@ -22,6 +22,9 @@ File `cloakchat_gui.py` cung cấp giao diện cửa sổ dùng chung cho Window
 | QR invite | Payload có version/checksum; không chứa private key hoặc session key |
 | Bluetooth | Android Sharesheet cho phép chọn Bluetooth để gửi invite; desktop có fallback QR |
 | Danh bạ | Lưu cục bộ tên + invite trong app data, không đồng bộ máy chủ |
+| Reactions | Emoji reaction được mã hóa bằng AES-GCM trên phiên E2EE |
+| Voice chat | PCM16 frame ngắn được mã hóa AES-GCM; sounddevice trên desktop, AudioRecord/AudioTrack trên Android |
+| Public IP | TCP trực tiếp không Tor; cần port forwarding và firewall, IP sẽ lộ cho peer |
 | Vanity onion | Wrapper `tools/vanity_onion.py` gọi `mkp224o` để tạo prefix dễ nhớ |
 | Cleanup | `atexit`, SIGINT/SIGTERM, đóng socket, dừng Tor và xóa DataDirectory tạm |
 
@@ -163,7 +166,7 @@ File tạo ra là `dist/CloakChatGUI.exe`. PyInstaller phải chạy trên đún
 Build APK trên máy Linux:
 
 ```bash
-sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake
+sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool libtool-bin libltdl-dev m4 pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake
 bash android/build-apk.sh
 ```
 

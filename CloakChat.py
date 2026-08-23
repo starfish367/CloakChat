@@ -75,6 +75,7 @@ CONFIRM_TIMEOUT = 180.0
 ONION_PUBLICATION_TIMEOUT = 180.0
 MAX_FRAME_SIZE = 1_048_576
 MAX_MESSAGE_BYTES = 64 * 1024
+MAX_VOICE_FRAME_BYTES = 4096
 
 PACKET_HANDSHAKE = 0x01
 PACKET_MESSAGE = 0x02
@@ -523,6 +524,28 @@ def decrypt_reaction(key: bytes, packet: bytes) -> str:
         raise ProtocolError("Xác thực reaction thất bại.") from exc
 
 
+def encrypt_voice_frame(key: bytes, frame: bytes) -> bytes:
+    """Mã hóa một frame PCM nhỏ; không dùng nonce lặp lại."""
+    if not frame or len(frame) > MAX_VOICE_FRAME_BYTES:
+        raise ValueError("Voice frame rỗng hoặc vượt quá giới hạn.")
+    nonce = os.urandom(12)
+    return bytes([PACKET_VOICE]) + nonce + AESGCM(key).encrypt(
+        nonce, frame, AAD_VOICE
+    )
+
+
+def decrypt_voice_frame(key: bytes, packet: bytes) -> bytes:
+    if len(packet) < 1 + 12 + 16 or packet[0] != PACKET_VOICE:
+        raise ProtocolError("Gói voice frame không hợp lệ.")
+    ciphertext = packet[13:]
+    if len(ciphertext) > MAX_VOICE_FRAME_BYTES + 16:
+        raise ProtocolError("Voice frame vượt quá giới hạn.")
+    try:
+        return AESGCM(key).decrypt(packet[1:13], ciphertext, AAD_VOICE)
+    except Exception as exc:
+        raise ProtocolError("Xác thực voice frame thất bại.") from exc
+
+
 def create_join_socket(
     onion_address: str,
     socks_port: int = SOCKS_PORT,
@@ -584,6 +607,7 @@ class ChatSession:
         confirm_callback: Optional[Callable[[str], bool]] = None,
         message_callback: Optional[Callable[[str], None]] = None,
         reaction_callback: Optional[Callable[[str], None]] = None,
+        voice_callback: Optional[Callable[[bytes], None]] = None,
         status_callback: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.connection = connection
@@ -591,6 +615,7 @@ class ChatSession:
         self.confirm_callback = confirm_callback
         self.message_callback = message_callback
         self.reaction_callback = reaction_callback
+        self.voice_callback = voice_callback
         self.status_callback = status_callback
         self.private_key = X25519PrivateKey.generate()
         self.local_public = self.private_key.public_key().public_bytes(
@@ -684,6 +709,12 @@ class ChatSession:
                         self.reaction_callback(reaction)
                     else:
                         safe_print(f"\n[Peer reaction] {reaction}")
+                elif packet[0] == PACKET_VOICE:
+                    if self.session_key is None:
+                        raise ProtocolError("Chưa có khóa phiên.")
+                    frame = decrypt_voice_frame(self.session_key, packet)
+                    if self.voice_callback is not None:
+                        self.voice_callback(frame)
                 elif packet == bytes([PACKET_CLOSE]):
                     safe_print("\n[!] Peer đã đóng phiên chat.")
                     break
@@ -710,6 +741,11 @@ class ChatSession:
         if self.session_key is None:
             raise RuntimeError("Phiên chưa hoàn tất handshake.")
         self._send(encrypt_reaction(self.session_key, reaction))
+
+    def send_voice_frame(self, frame: bytes) -> None:
+        if self.session_key is None:
+            raise RuntimeError("Phiên chưa hoàn tất handshake.")
+        self._send(encrypt_voice_frame(self.session_key, frame))
 
     def close(self, notify_peer: bool = True) -> None:
         if self.stop_event.is_set():
@@ -1074,6 +1110,8 @@ __all__ = [
     "derive_session_key",
     "encrypt_message",
     "encrypt_reaction",
+    "encrypt_voice_frame",
+    "decrypt_voice_frame",
     "main",
     "recv_packet",
     "safety_number",

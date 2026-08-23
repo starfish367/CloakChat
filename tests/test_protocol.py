@@ -31,6 +31,13 @@ class ProtocolTests(unittest.TestCase):
         packet = MODULE.encrypt_message(key_a, "xin chào")
         self.assertEqual(MODULE.decrypt_message(key_b, packet), "xin chào")
 
+        reaction_packet = MODULE.encrypt_reaction(key_a, "👍")
+        self.assertEqual(MODULE.decrypt_reaction(key_b, reaction_packet), "👍")
+
+        voice_frame = b"\\x01\\x02" * 320
+        voice_packet = MODULE.encrypt_voice_frame(key_a, voice_frame)
+        self.assertEqual(MODULE.decrypt_voice_frame(key_b, voice_packet), voice_frame)
+
     def test_safety_number_is_30_digits(self):
         one = b"a" * 32
         two = b"b" * 32

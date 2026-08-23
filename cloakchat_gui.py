@@ -39,6 +39,7 @@ import CloakChat as core
 from bluetooth_share import share_invite
 from contacts_store import ContactStore
 from invite_utils import create_invite, parse_invite, save_qr
+from voice_chat import VoiceChat
 
 
 class CloakChatGUI(App):
@@ -56,6 +57,7 @@ class CloakChatGUI(App):
         self.safety_popup: Optional[Popup] = None
         self.current_invite: Optional[str] = None
         self.contacts: Optional[ContactStore] = None
+        self.voice: Optional[VoiceChat] = None
 
     def build(self):
         self.title = "CloakChat"
@@ -120,7 +122,7 @@ class CloakChatGUI(App):
         fields.add_widget(Label(text="Mạng", color=(0.58, 0.65, 0.78, 1), halign="left"))
         self.transport = Spinner(
             text="LAN trực tiếp",
-            values=("LAN trực tiếp", "Tor / Onion"),
+            values=("LAN trực tiếp", "IP công cộng", "Tor / Onion"),
             size_hint_y=None,
             height=dp(42),
             background_normal="",
@@ -139,6 +141,7 @@ class CloakChatGUI(App):
             color=(0.92, 0.95, 1, 1),
         )
         self.role.bind(text=lambda *_: self._role_changed())
+        self.transport.bind(text=lambda *_: self._role_changed())
         fields.add_widget(self.role)
         connection_card.add_widget(fields)
 
@@ -172,9 +175,12 @@ class CloakChatGUI(App):
         self.bluetooth_button.bind(on_press=lambda *_: self.share_bluetooth())
         self.contacts_button = Button(text="DANH BẠ", background_normal="", background_color=(0.12, 0.18, 0.28, 1))
         self.contacts_button.bind(on_press=lambda *_: self.show_contacts())
+        self.voice_button = Button(text="VOICE", background_normal="", background_color=(0.12, 0.18, 0.28, 1), disabled=True)
+        self.voice_button.bind(on_press=lambda *_: self.toggle_voice())
         tools.add_widget(self.qr_button)
         tools.add_widget(self.bluetooth_button)
         tools.add_widget(self.contacts_button)
+        tools.add_widget(self.voice_button)
         root.add_widget(tools)
 
         self.connection_label = Label(
@@ -212,6 +218,15 @@ class CloakChatGUI(App):
         chat_panel.add_widget(scroll)
         root.add_widget(chat_panel)
 
+        reaction_row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(6))
+        reaction_row.add_widget(Label(text="React", color=(0.58, 0.65, 0.78, 1), size_hint_x=None, width=dp(58)))
+        for emoji in ("👍", "❤️", "😂", "😮", "🎉"):
+            reaction_button = Button(text=emoji, font_size=dp(20), background_normal="", background_color=(0.12, 0.18, 0.28, 1), disabled=True)
+            reaction_button.bind(on_press=lambda _btn, value=emoji: self.send_reaction(value))
+            reaction_row.add_widget(reaction_button)
+        self.reaction_buttons = reaction_row.children[0:5]
+        root.add_widget(reaction_row)
+
         compose = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(8))
         self.message_input = TextInput(
             hint_text="Viết tin nhắn bảo mật...",
@@ -242,13 +257,15 @@ class CloakChatGUI(App):
         """Host không cần nhập địa chỉ; Join mới dùng ô invite."""
         if hasattr(self, "address") and hasattr(self, "role"):
             is_join = self.role.text == "Join"
-            self.address.disabled = not is_join
-            self.address.opacity = 1 if is_join else 0.55
-            self.address.hint_text = (
-                "Dán invite QR hoặc IP:cổng / tên .onion"
-                if is_join
-                else "Host sẽ hiển thị địa chỉ sau khi bấm Bắt đầu"
-            )
+            is_public_host = self.role.text == "Host" and self.transport.text == "IP công cộng"
+            self.address.disabled = not (is_join or is_public_host)
+            self.address.opacity = 1 if (is_join or is_public_host) else 0.55
+            if is_public_host:
+                self.address.hint_text = "IP public của máy này, ví dụ 203.0.113.10"
+            elif is_join:
+                self.address.hint_text = "Dán invite QR hoặc IP:cổng / tên .onion"
+            else:
+                self.address.hint_text = "Host sẽ hiển thị địa chỉ sau khi bấm Bắt đầu"
 
     def _append_log(self, text: str):
         """Cập nhật UI trên main thread của Kivy."""
@@ -280,11 +297,12 @@ class CloakChatGUI(App):
     def _connection_worker(self):
         try:
             is_tor = self.transport.text == "Tor / Onion"
+            is_public = self.transport.text == "IP công cộng"
             is_host = self.role.text == "Host"
             if is_host:
-                connection = self._prepare_host(is_tor)
+                connection = self._prepare_host(is_tor, is_public)
             else:
-                connection = self._prepare_join(is_tor)
+                connection = self._prepare_join(is_tor, is_public)
             if self.stop_event.is_set():
                 connection.close()
                 return
@@ -294,6 +312,7 @@ class CloakChatGUI(App):
                 is_host=is_host,
                 confirm_callback=self._confirm_safety_number,
                 message_callback=self._message_from_peer,
+                reaction_callback=self._reaction_from_peer,
                 status_callback=self._status_from_worker,
             )
             self._status_from_worker("[*] Đang trao đổi khóa và chờ xác nhận Safety Number...")
@@ -312,7 +331,7 @@ class CloakChatGUI(App):
             self._status_from_worker(f"[!] Lỗi UI không mong muốn: {exc}")
             self._reset_ui()
 
-    def _prepare_host(self, is_tor: bool) -> socket.socket:
+    def _prepare_host(self, is_tor: bool, is_public: bool = False) -> socket.socket:
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         bind_host = core.SOCKS_HOST if is_tor else "0.0.0.0"
@@ -327,6 +346,13 @@ class CloakChatGUI(App):
             address = onion
             self._status_from_worker("[TOR HOST] Onion service đã được công bố.")
             invite_transport = "tor"
+        elif is_public:
+            public_ip = self.address.text.strip()
+            if not public_ip:
+                raise ValueError("Host IP công cộng cần nhập IP public trước khi bắt đầu.")
+            address = f"{public_ip}:{port}"
+            self._status_from_worker("[PUBLIC HOST] Kết nối TCP công cộng trực tiếp; Tor không được dùng.")
+            invite_transport = "public"
         else:
             address = f"{core.get_local_ipv4()}:{port}"
             self._status_from_worker("[LAN HOST] Tor không được khởi động.")
@@ -354,11 +380,13 @@ class CloakChatGUI(App):
                 continue
         raise KeyboardInterrupt
 
-    def _prepare_join(self, is_tor: bool) -> socket.socket:
+    def _prepare_join(self, is_tor: bool, is_public: bool = False) -> socket.socket:
         value = self.address.text.strip()
         if value.startswith("CLOAKCHAT:"):
             invite = parse_invite(value)
             value = invite["address"]
+            is_tor = invite["transport"] == "tor"
+            is_public = invite["transport"] == "public"
             self._status_from_worker(
                 f"[*] Đã đọc invite {invite['transport']} từ QR/danh bạ."
             )
@@ -369,6 +397,9 @@ class CloakChatGUI(App):
             self.daemon.start()
             self._status_from_worker("[*] Đang kết nối .onion qua SOCKS5 Tor...")
             return core.create_join_socket(value, socks_port=self.daemon.socks_port)
+        if is_public:
+            self._status_from_worker("[*] Đang kết nối IP công cộng trực tiếp; Tor không được dùng...")
+            return core.create_public_socket(value)
         self._status_from_worker("[*] Đang kết nối IP nội bộ trực tiếp; Tor không được dùng...")
         return core.create_lan_socket(value)
 
@@ -418,11 +449,50 @@ class CloakChatGUI(App):
     def _message_from_peer(self, message: str):
         Clock.schedule_once(lambda _dt: self._append_log(f"Peer: {message}"), 0)
 
+    def _reaction_from_peer(self, reaction: str):
+        Clock.schedule_once(lambda _dt: self._append_log(f"Peer reaction: {reaction}"), 0)
+
+    def _enable_reactions(self, enabled: bool):
+        for button in getattr(self, "reaction_buttons", []):
+            button.disabled = not enabled
+
     def _enable_share_buttons(self):
         if hasattr(self, "qr_button"):
             self.qr_button.disabled = False
         if hasattr(self, "bluetooth_button"):
             self.bluetooth_button.disabled = False
+
+    def _enable_voice(self, enabled: bool):
+        if hasattr(self, "voice_button"):
+            self.voice_button.disabled = not enabled
+            if not enabled:
+                self.voice_button.text = "VOICE"
+
+    def toggle_voice(self):
+        """Bật/tắt voice trên desktop; Android báo rõ nếu chưa có audio backend."""
+        if not self.session:
+            return
+        if self.voice is not None:
+            self.voice.stop()
+            self.voice = None
+            self.voice_button.text = "VOICE"
+            self._append_log("[VOICE] Đã tắt voice chat.")
+            return
+        try:
+            self.voice = VoiceChat(self.session, status_callback=self._status_from_worker)
+            self.voice.start()
+            self.voice_button.text = "TẮT VOICE"
+        except Exception as exc:
+            self.voice = None
+            self._append_log(f"[VOICE] Không thể bật voice: {exc}")
+
+    def _stop_voice(self):
+        if self.voice is not None:
+            self.voice.stop()
+            self.voice = None
+        if hasattr(self, "voice_button"):
+            self.voice_button.text = "VOICE"
+            self.voice_button.disabled = True
 
     def show_qr(self):
         if not self.current_invite:
@@ -495,7 +565,18 @@ class CloakChatGUI(App):
         self.security_badge.text = "●  E2EE\n[size=11]SECURE[/size]"
         self.message_input.disabled = False
         self.send_button.disabled = False
+        self._enable_reactions(True)
+        self._enable_voice(True)
         self._append_log("[+] Chat đã bắt đầu. Tin nhắn được mã hóa AES-256-GCM.")
+
+    def send_reaction(self, reaction: str):
+        if not self.session:
+            return
+        try:
+            self.session.send_reaction(reaction)
+            self._append_log(f"Bạn reaction: {reaction}")
+        except (ConnectionError, OSError, RuntimeError, ValueError) as exc:
+            self._append_log(f"[!] Không thể gửi reaction: {exc}")
 
     def send_message(self, *_args):
         message = self.message_input.text.strip()
@@ -508,8 +589,9 @@ class CloakChatGUI(App):
         except (ConnectionError, OSError, RuntimeError) as exc:
             self._append_log(f"[!] Không thể gửi: {exc}")
 
-    def stop_connection(self):
+    def stop_connection(self, *_args):
         self.stop_event.set()
+        self._stop_voice()
         if self.confirm_event:
             self.confirm_event.set()
         if self.session:
@@ -541,6 +623,8 @@ class CloakChatGUI(App):
             self.role.disabled = False
             self.message_input.disabled = True
             self.send_button.disabled = True
+            self._enable_reactions(False)
+            self._enable_voice(False)
             self.connection_label.text = "●  Đã ngắt kết nối — sẵn sàng cho phiên mới"
             self.security_badge.text = "●  E2EE\n[size=11]READY[/size]"
             self.qr_button.disabled = True
