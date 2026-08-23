@@ -109,7 +109,7 @@ jobs:
           python -m venv .venv-buildozer
           . .venv-buildozer/bin/activate
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install buildozer cython
+          python -m pip install "buildozer<2" "cython==0.29.34"
 
       - name: Cache Android toolchains
         uses: actions/cache@v4

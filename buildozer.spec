@@ -6,7 +6,8 @@ package.domain = org.cloakchat
 source.dir = .
 source.include_exts = py,txt,md
 source.exclude_dirs = .git,.venv,.venv-buildozer,.venv-gui,.buildozer,tests,build,dist,__pycache__
-version = 1.1.0
+version = 1.2.0
+p4a.branch = master
 
 # Kivy GUI; cryptography được build qua recipe của python-for-android.
 requirements = python3,kivy,cryptography,pyjnius,pysocks,stem,qrcode,pillow
