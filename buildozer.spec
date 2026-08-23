@@ -7,7 +7,8 @@ source.dir = .
 source.include_exts = py,txt,md
 source.exclude_dirs = .git,.venv,.venv-buildozer,.venv-gui,.buildozer,tests,build,dist,__pycache__
 version = 1.2.0
-p4a.branch = master
+# Tag ổn định: tránh p4a master hiện tại build Python 3.14 chưa tương thích cryptography-cffi trên armeabi-v7a.
+p4a.branch = v2024.01.21
 
 # Kivy GUI; cryptography được build qua recipe của python-for-android.
 requirements = python3,kivy,cryptography,pyjnius,pysocks,stem,qrcode,pillow
