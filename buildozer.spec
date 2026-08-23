@@ -23,4 +23,4 @@ p4a.local_recipes = p4a-recipes
 log_level = 2
 warn_on_root = 1
 
-# Bản Android ưu tiên LAN. Tor mode cần binary Tor/Orbot tích hợp riêng.
+# Android: LAN luôn khả dụng; Join onion có thể dùng Orbot SOCKS5 đang chạy (mặc định 127.0.0.1:9050).

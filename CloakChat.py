@@ -66,6 +66,7 @@ APP_NAME = "CloakChat"
 PROTOCOL_VERSION = b"cloakchat_v1"
 SOCKS_HOST = "127.0.0.1"
 SOCKS_PORT = 9050
+ORBOT_SOCKS_PORT = 9050
 CONTROL_HOST = "127.0.0.1"
 CONTROL_PORT = 9051
 HIDDEN_SERVICE_PORT = 80
@@ -544,6 +545,14 @@ def decrypt_voice_frame(key: bytes, packet: bytes) -> bytes:
         return AESGCM(key).decrypt(packet[1:13], ciphertext, AAD_VOICE)
     except Exception as exc:
         raise ProtocolError("Xác thực voice frame thất bại.") from exc
+
+
+def create_orbot_join_socket(
+    onion_address: str,
+    socks_port: int = ORBOT_SOCKS_PORT,
+) -> socks.socksocket:
+    """Kết nối onion qua Orbot đang chạy, không tạo Tor daemon mới."""
+    return create_join_socket(onion_address, socks_port=socks_port)
 
 
 def create_join_socket(
@@ -1104,6 +1113,7 @@ __all__ = [
     "ChatSession",
     "TorDaemon",
     "create_join_socket",
+    "create_orbot_join_socket",
     "create_public_socket",
     "decrypt_message",
     "decrypt_reaction",

@@ -2,17 +2,18 @@
 
 CloakChat là ứng dụng chat P2P ẩn danh hai người qua mạng Tor. Phiên bản hiện tại là CLI, sử dụng một file Python duy nhất và ưu tiên khả năng chạy trên **PC Linux** तथा **Android thông qua Termux**. Mã hóa đầu-cuối dùng X25519, HKDF-SHA256 và AES-256-GCM; địa chỉ Host là ephemeral onion service nên không được lưu cố định sau khi thoát.
 
-> **Tình trạng nền tảng:** `CloakChat.py` là bản CLI cho Linux/Android Termux. `cloakchat_gui.py` là bản giao diện cửa sổ Kivy cho Windows, Linux và Android. Chế độ LAN E2EE hoạt động trên cả ba nền tảng; APK Android hiện ưu tiên LAN vì Tor trong APK cần tích hợp binary/service Android riêng.
+> **Tình trạng nền tảng:** `CloakChat.py` là bản CLI cho Linux/Android Termux. `cloakchat_gui.py` là bản giao diện Kivy cho Windows, Linux và Android. Chế độ LAN E2EE hoạt động trên cả ba nền tảng; APK Android hỗ trợ Join `.onion` qua Orbot SOCKS5 đang chạy, còn Host onion vẫn cần Tor daemon/control service phù hợp.
 
 ## Tính năng chính
 
-File `cloakchat_gui.py` cung cấp giao diện cửa sổ dùng chung cho Windows, Linux và Android. Core mạng/mật mã vẫn nằm trong `CloakChat.py`, vì vậy GUI và CLI dùng chung X25519, Safety Number và AES-256-GCM. GUI có nút tạo QR invite, chia sẻ invite qua Android Sharesheet/Bluetooth và danh bạ cục bộ.
+File `cloakchat_gui.py` cung cấp giao diện Kivy dùng chung cho Windows, Linux và Android. Core mạng/mật mã vẫn nằm trong `CloakChat.py`, vì vậy GUI và CLI dùng chung X25519, Safety Number và AES-256-GCM. GUI có bộ chọn ngôn ngữ `Tiếng Việt`/`English`, khung chat lớn hơn, nút tạo QR invite, Copy/Share invite, chia sẻ qua Android Sharesheet/Bluetooth và danh bạ cục bộ.
 
 | Thành phần | Triển khai |
 |---|---|
 | Tor transport | Tor daemon tạm thời, SOCKS5 `127.0.0.1:9050`, ControlPort `127.0.0.1:9051`, CookieAuthentication |
 | Host qua Tor | Tạo ephemeral onion service v3 và lắng nghe TCP localhost |
 | Join qua Tor | Kết nối `.onion` qua SOCKS5 với DNS remote (`rdns=True`) |
+| Join qua Orbot | Android mở Orbot và kết nối `.onion` qua SOCKS5 `127.0.0.1:9050`; có thể đổi bằng `CLOAKCHAT_ORBOT_SOCKS_PORT` |
 | Host LAN | Lắng nghe IP nội bộ trực tiếp, không khởi động Tor |
 | Join LAN | Kết nối `IP:cổng` trực tiếp, không dùng SOCKS5/Tor |
 | E2EE | X25519, HKDF-SHA256 với `cloakchat_v1`, AES-256-GCM nonce 12 byte |
@@ -21,6 +22,7 @@ File `cloakchat_gui.py` cung cấp giao diện cửa sổ dùng chung cho Window
 | Runtime | Main thread nhập liệu, receiver thread nhận và giải mã |
 | QR invite | Payload có version/checksum; không chứa private key hoặc session key |
 | Bluetooth | Android Sharesheet cho phép chọn Bluetooth để gửi invite; desktop có fallback QR |
+| Copy/Share invite | Host có nút sao chép địa chỉ onion và chia sẻ invite; Android dùng Sharesheet, desktop dùng clipboard fallback |
 | Danh bạ | Lưu cục bộ tên + invite trong app data, không đồng bộ máy chủ |
 | Reactions | Emoji reaction được mã hóa bằng AES-GCM trên phiên E2EE |
 | Voice chat | PCM16 frame ngắn được mã hóa AES-GCM; sounddevice trên desktop, AudioRecord/AudioTrack trên Android |
@@ -109,7 +111,7 @@ Trong màn hình chat, nhập tin nhắn rồi nhấn Enter. Nhập `exit` để
 
 ### QR, Bluetooth và danh bạ
 
-Sau khi Host có địa chỉ, nút `QR` tạo ảnh QR chứa invite có checksum. Invite chỉ chứa transport và địa chỉ kết nối, không chứa private key hoặc session key. Trên Android, nút `Bluetooth` mở Android Sharesheet; người dùng có thể chọn Bluetooth để chuyển invite. Trên desktop, hãy dùng QR hoặc sao chép invite.
+Sau khi Host có địa chỉ, GUI hiển thị hàng `Gửi địa chỉ này cho peer` cùng nút `Sao chép` và `Chia sẻ`. `Sao chép` đưa địa chỉ onion/IP vào clipboard; `Chia sẻ` gửi invite đầy đủ qua Android Sharesheet, còn Linux/Windows sẽ sao chép invite để bạn dán vào ứng dụng khác. Nút `QR` tạo ảnh QR chứa invite có checksum. Invite chỉ chứa transport và địa chỉ kết nối, không chứa private key hoặc session key. Trên Android, nút `Bluetooth` cũng mở Android Sharesheet để người dùng chọn Bluetooth.
 
 Nút `Danh bạ` lưu tên và invite trong thư mục dữ liệu cục bộ của ứng dụng. Danh bạ không được đồng bộ lên máy chủ. Khi nạp một invite từ danh bạ, GUI tự chọn lại transport LAN/Tor.
 
@@ -138,6 +140,8 @@ Cài dependency GUI và chạy:
 python3 -m pip install -r requirements-gui.txt
 python3 cloakchat_gui.py
 ```
+
+Trong GUI, dùng bộ chọn `Tiếng Việt`/`English` ở góc trên để đổi nhãn và hướng dẫn mà không làm thay đổi phiên E2EE đang chạy. Khi Host tạo địa chỉ, hàng `Gửi địa chỉ này cho peer` có thể sao chép địa chỉ trực tiếp hoặc chia sẻ invite đầy đủ.
 
 Trên Linux/Armbian, build executable bằng:
 
@@ -170,7 +174,7 @@ sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool li
 bash android/build-apk.sh
 ```
 
-APK debug sẽ nằm trong `bin/`. Trên Android, chọn `LAN trực tiếp` để chat E2EE không cần Tor. Tor trong APK cần tích hợp Orbot hoặc binary Tor Android riêng; không dùng binary Tor Linux/Windows trong APK.
+APK debug sẽ nằm trong `bin/`. Trên Android, chọn `LAN trực tiếp` để chat E2EE không cần Tor. Để Join `.onion` bằng Orbot, cài Orbot từ [F-Droid](https://f-droid.org/packages/org.torproject.android/) hoặc [Google Play](https://play.google.com/store/apps/details?id=org.torproject.android), mở Orbot và chờ proxy hoạt động, sau đó chọn `Orbot SOCKS5` trong CloakChat. Cổng mặc định là `127.0.0.1:9050`; nếu Orbot đang dùng cổng khác, đặt biến môi trường `CLOAKCHAT_ORBOT_SOCKS_PORT` tương ứng. Bản tích hợp hiện mở Orbot và hỗ trợ Join onion qua SOCKS5; không dùng binary Tor Linux/Windows trong APK.
 
 ## Build tự động bằng GitHub Actions
 
