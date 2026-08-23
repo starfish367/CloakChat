@@ -13,10 +13,16 @@ permissions:
 env:
   PYTHON_VERSION: "3.12"
 
+# Không để các lần push/dispatch cũ treo chiếm runner và làm chậm bản build mới.
+concurrency:
+  group: cloakchat-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   linux:
     name: Linux GUI executable
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -51,6 +57,7 @@ jobs:
   windows:
     name: Windows GUI executable
     runs-on: windows-2022
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -80,6 +87,7 @@ jobs:
   android:
     name: Android APK
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v5
