@@ -98,6 +98,10 @@ Chế độ LAN chỉ thay đổi **lớp truyền tải**. Sau khi socket kết
 
 Sau handshake, cả hai phía sẽ hiển thị cùng một **Safety Number**. Hai người phải đối chiếu số này qua một kênh tin cậy bên ngoài và chỉ nhập `y` khi số trùng khớp. Nếu một phía nhập khác `y`, kết nối sẽ bị từ chối.
 
+### Khi Join `.onion` bị timeout
+
+Host phải vẫn đang chạy với đúng địa chỉ ephemeral hiện tại. Nếu Host thoát rồi khởi động lại, địa chỉ `.onion` cũ không còn dùng được. Bản mới đợi Tor bootstrap hoàn tất trước khi Join và tăng thời gian tạo circuit lên 120 giây; nếu vẫn thất bại, thông báo sẽ phân biệt Tor chưa bootstrap, Host đã thoát hoặc onion address đã hết hiệu lực. Hai thiết bị không cần mở cổng Internet cho Tor, nhưng cả hai phải có kết nối Tor ổn định.
+
 Trong màn hình chat, nhập tin nhắn rồi nhấn Enter. Nhập `exit` để đóng phiên, dừng Tor và xóa dữ liệu tạm.
 
 ### QR, Bluetooth và danh bạ

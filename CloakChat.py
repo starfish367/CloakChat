@@ -70,6 +70,7 @@ CONTROL_HOST = "127.0.0.1"
 CONTROL_PORT = 9051
 HIDDEN_SERVICE_PORT = 80
 CONNECT_TIMEOUT = 30.0
+ONION_CONNECT_TIMEOUT = 120.0
 CONFIRM_TIMEOUT = 180.0
 ONION_PUBLICATION_TIMEOUT = 180.0
 MAX_FRAME_SIZE = 1_048_576
@@ -79,8 +80,12 @@ PACKET_HANDSHAKE = 0x01
 PACKET_MESSAGE = 0x02
 PACKET_CONFIRM = 0x03
 PACKET_CLOSE = 0x04
+PACKET_REACTION = 0x05
+PACKET_VOICE = 0x06
 
 AAD_MESSAGE = PROTOCOL_VERSION + b"|message"
+AAD_REACTION = PROTOCOL_VERSION + b"|reaction"
+AAD_VOICE = PROTOCOL_VERSION + b"|voice"
 
 _PRINT_LOCK = threading.Lock()
 _SHUTDOWN = threading.Event()
@@ -191,6 +196,27 @@ def wait_for_tcp_port(
     )
 
 
+def wait_for_tor_bootstrap(
+    controller: Controller,
+    timeout: float,
+) -> None:
+    """Chờ Tor có circuit hoàn chỉnh trước khi cho phép kết nối onion."""
+    deadline = time.monotonic() + timeout
+    last_status = "chưa có trạng thái"
+    while time.monotonic() < deadline and not _SHUTDOWN.is_set():
+        try:
+            last_status = controller.get_info("status/bootstrap-phase")
+            if "PROGRESS=100" in last_status or "TAG=done" in last_status:
+                return
+        except Exception as exc:
+            last_status = str(exc)
+        time.sleep(1.0)
+    raise TimeoutError(
+        "Tor chưa hoàn tất bootstrap trong "
+        f"{timeout:.0f} giây. Trạng thái cuối: {last_status}"
+    )
+
+
 class TorDaemon:
     """Quản lý vòng đời Tor daemon và ephemeral onion service."""
 
@@ -227,6 +253,7 @@ class TorDaemon:
             existing = Controller.from_port(address=CONTROL_HOST, port=CONTROL_PORT)
             existing.authenticate()
             wait_for_tcp_port(SOCKS_HOST, SOCKS_PORT, 2.0)
+            wait_for_tor_bootstrap(existing, ONION_PUBLICATION_TIMEOUT)
             self.controller = existing
             self.socks_port = SOCKS_PORT
             self.control_port = CONTROL_PORT
@@ -297,7 +324,8 @@ class TorDaemon:
                 address=CONTROL_HOST, port=self.control_port
             )
             self.controller.authenticate()
-            safe_print("[+] Tor daemon đã sẵn sàng.")
+            wait_for_tor_bootstrap(self.controller, ONION_PUBLICATION_TIMEOUT)
+            safe_print("[+] Tor daemon đã sẵn sàng và đã bootstrap xong.")
         except Exception as exc:
             details = self._diagnostic_log()
             self.stop()
@@ -474,6 +502,27 @@ def decrypt_message(key: bytes, packet: bytes) -> str:
         ) from exc
 
 
+def encrypt_reaction(key: bytes, reaction: str) -> bytes:
+    """Mã hóa emoji reaction bằng nonce riêng và AAD riêng."""
+    value = reaction.strip()
+    encoded = value.encode("utf-8")
+    if not value or len(encoded) > 32:
+        raise ValueError("Reaction không hợp lệ.")
+    nonce = os.urandom(12)
+    return bytes([PACKET_REACTION]) + nonce + AESGCM(key).encrypt(
+        nonce, encoded, AAD_REACTION
+    )
+
+
+def decrypt_reaction(key: bytes, packet: bytes) -> str:
+    if len(packet) < 1 + 12 + 16 or packet[0] != PACKET_REACTION:
+        raise ProtocolError("Gói reaction không hợp lệ.")
+    try:
+        return AESGCM(key).decrypt(packet[1:13], packet[13:], AAD_REACTION).decode("utf-8")
+    except Exception as exc:
+        raise ProtocolError("Xác thực reaction thất bại.") from exc
+
+
 def create_join_socket(
     onion_address: str,
     socks_port: int = SOCKS_PORT,
@@ -505,8 +554,22 @@ def create_join_socket(
         port=socks_port,
         rdns=True,
     )
-    connection.settimeout(CONNECT_TIMEOUT)
-    connection.connect((host, remote_port))
+    connection.settimeout(ONION_CONNECT_TIMEOUT)
+    try:
+        connection.connect((host, remote_port))
+    except socket.timeout as exc:
+        connection.close()
+        raise TimeoutError(
+            "Tor SOCKS5 không kết nối được tới onion service trong "
+            f"{ONION_CONNECT_TIMEOUT:.0f} giây. Hãy kiểm tra Host còn đang chạy "
+            "và onion address còn mới không."
+        ) from exc
+    except Exception as exc:
+        connection.close()
+        raise ConnectionError(
+            "Không thể kết nối onion service qua Tor SOCKS5; "
+            "Host có thể đã thoát hoặc Tor chưa tạo được circuit."
+        ) from exc
     connection.settimeout(None)
     return connection
 
@@ -520,12 +583,14 @@ class ChatSession:
         is_host: bool,
         confirm_callback: Optional[Callable[[str], bool]] = None,
         message_callback: Optional[Callable[[str], None]] = None,
+        reaction_callback: Optional[Callable[[str], None]] = None,
         status_callback: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.connection = connection
         self.is_host = is_host
         self.confirm_callback = confirm_callback
         self.message_callback = message_callback
+        self.reaction_callback = reaction_callback
         self.status_callback = status_callback
         self.private_key = X25519PrivateKey.generate()
         self.local_public = self.private_key.public_key().public_bytes(
@@ -611,6 +676,14 @@ class ChatSession:
                     else:
                         safe_print(f"\n[Peer] {message}")
                         safe_print("[Bạn] ",)
+                elif packet[0] == PACKET_REACTION:
+                    if self.session_key is None:
+                        raise ProtocolError("Chưa có khóa phiên.")
+                    reaction = decrypt_reaction(self.session_key, packet)
+                    if self.reaction_callback is not None:
+                        self.reaction_callback(reaction)
+                    else:
+                        safe_print(f"\n[Peer reaction] {reaction}")
                 elif packet == bytes([PACKET_CLOSE]):
                     safe_print("\n[!] Peer đã đóng phiên chat.")
                     break
@@ -632,6 +705,11 @@ class ChatSession:
         if self.session_key is None:
             raise RuntimeError("Phiên chưa hoàn tất handshake.")
         self._send(encrypt_message(self.session_key, message))
+
+    def send_reaction(self, reaction: str) -> None:
+        if self.session_key is None:
+            raise RuntimeError("Phiên chưa hoàn tất handshake.")
+        self._send(encrypt_reaction(self.session_key, reaction))
 
     def close(self, notify_peer: bool = True) -> None:
         if self.stop_event.is_set():
@@ -756,6 +834,43 @@ def run_host_lan() -> None:
         _ACTIVE_LISTENER = None
 
 
+def run_host_public() -> None:
+    """Host TCP public IP không Tor; router phải forward cổng TCP này."""
+    global _ACTIVE_LISTENER
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    _ACTIVE_LISTENER = listener
+    try:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("0.0.0.0", 0))
+        port = listener.getsockname()[1]
+        listener.listen(1)
+        public_ip = input("Nhập IP công cộng của máy Host: ").strip()
+        if not public_ip:
+            raise ValueError("Cần nhập IP công cộng để gửi cho peer.")
+        safe_print("\n[PUBLIC HOST] Tor đã được tắt; TCP public trực tiếp.")
+        safe_print(f"[PUBLIC HOST] Địa chỉ gửi cho peer: {public_ip}:{port}")
+        safe_print("[PUBLIC HOST] Hãy cấu hình port forwarding và firewall trước khi chờ peer.")
+        connection = accept_host_connection(listener, transport_name="PUBLIC")
+        try:
+            run_chat(connection, is_host=True)
+        finally:
+            connection.close()
+    finally:
+        listener.close()
+        _ACTIVE_LISTENER = None
+
+
+def run_join_public() -> None:
+    """Join TCP public IP không Tor."""
+    address = input("Nhập IP công cộng:cổng của Host: ").strip()
+    safe_print("[*] Đang kết nối IP công cộng trực tiếp; không dùng Tor...")
+    connection = create_public_socket(address)
+    try:
+        run_chat(connection, is_host=False)
+    finally:
+        connection.close()
+
+
 def create_lan_socket(address: str) -> socket.socket:
     """Kết nối TCP trực tiếp tới IPv4/hostname trong mạng nội bộ."""
     value = address.strip()
@@ -778,6 +893,11 @@ def create_lan_socket(address: str) -> socket.socket:
     except Exception:
         connection.close()
         raise
+
+
+def create_public_socket(address: str) -> socket.socket:
+    """Kết nối TCP trực tiếp tới IP public/hostname, không dùng Tor."""
+    return create_lan_socket(address)
 
 
 def run_join_lan() -> None:
@@ -884,11 +1004,14 @@ def main() -> int:
             safe_print("[2] Join - kết nối .onion qua Tor")
             safe_print("[3] Host LAN - IP nội bộ, không dùng Tor, vẫn E2EE")
             safe_print("[4] Join LAN - IP nội bộ, không dùng Tor, vẫn E2EE")
-            safe_print("[5] Thoát")
+            safe_print("[5] Host public IP - Internet trực tiếp, không Tor, vẫn E2EE")
+            safe_print("[6] Join public IP - Internet trực tiếp, không Tor, vẫn E2EE")
+            safe_print("[7] Thoát")
             choice = input("Lựa chọn: ").strip()
-            if choice == "5":
+            if choice == "7":
                 return 0
-            if choice not in ("1", "2", "3", "4"):
+            if choice not in ("1", "2", "3", "4", "5", "6"):
+
                 safe_print("[!] Lựa chọn không hợp lệ.")
                 continue
 
@@ -901,6 +1024,12 @@ def main() -> int:
                 elif choice == "4":
                     # Không tạo TorDaemon trong chế độ LAN.
                     run_join_lan()
+                elif choice in ("5", "6"):
+                    # Public IP dùng TCP trực tiếp; Host cần port forwarding.
+                    if choice == "5":
+                        run_host_public()
+                    else:
+                        run_join_public()
                 else:
                     daemon = TorDaemon()
                     _ACTIVE_DAEMON = daemon
@@ -917,8 +1046,8 @@ def main() -> int:
                 safe_print(f"[!] Không thể hoàn tất phiên: {exc}")
             finally:
                 close_active_resources()
-                if choice in ("3", "4"):
-                    safe_print("[*] Phiên LAN đã dọn dẹp socket; Tor không được khởi động.")
+                if choice in ("3", "4", "5", "6"):
+                    safe_print("[*] Phiên TCP trực tiếp đã dọn dẹp socket; Tor không được khởi động.")
                 else:
                     safe_print("[*] Tài nguyên Tor và dữ liệu tạm đã được dọn dẹp.")
     except (KeyboardInterrupt, EOFError):
@@ -939,9 +1068,12 @@ __all__ = [
     "ChatSession",
     "TorDaemon",
     "create_join_socket",
+    "create_public_socket",
     "decrypt_message",
+    "decrypt_reaction",
     "derive_session_key",
     "encrypt_message",
+    "encrypt_reaction",
     "main",
     "recv_packet",
     "safety_number",
