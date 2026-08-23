@@ -127,7 +127,7 @@ jobs:
           set -euo pipefail
           tmp="$RUNNER_TEMP/freetype-2.14.1.tar.gz"
           curl --fail --location --retry 8 --retry-all-errors --retry-delay 5 \
-            "https://sourceforge.net/projects/freetype/files/freetype2/2.14.1/freetype-2.14.1.tar.gz/download" \
+            "https://downloads.sourceforge.net/freetype/freetype2/2.14.1/freetype-2.14.1.tar.gz" \
             --output "$tmp"
           # p4a dùng package cache theo nhiều layout tùy phiên bản; seed
           # cả cache global và storage-dir của Buildozer.

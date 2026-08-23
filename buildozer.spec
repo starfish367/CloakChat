@@ -20,3 +20,6 @@ log_level = 2
 warn_on_root = 1
 
 # Bản Android ưu tiên LAN. Tor mode cần binary Tor/Orbot tích hợp riêng.
+
+# Dùng local recipe để tránh mirror Savannah lỗi 502 trong CI.
+p4a.local_recipes = p4a-recipes
