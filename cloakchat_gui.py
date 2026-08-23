@@ -11,6 +11,7 @@ from __future__ import annotations
 import atexit
 import hashlib
 import os
+import secrets
 import socket
 import sys
 import threading
@@ -129,13 +130,19 @@ class CloakChatGUI(App):
             "replying": "Đang trả lời tin nhắn",
             "group_mode": "Chế độ chat",
             "security_level": "Mức bảo mật",
-            "group_b_started": "Group B cần protocol group-key riêng; chưa được bật để tránh downgrade.",
+            "group_b_started": "Group B dùng group key; relay không giải mã trong luồng bình thường.",
             "group_ready": "Group A đang chờ thành viên; Host relay giải mã được nội dung.",
-            "security_warning": "Mức Strict yêu cầu Group B E2EE thật; chưa thể chạy khi protocol group-key chưa bật.",
+            "group_b_ready": "Group B đang chờ thành viên; relay chuyển ciphertext và xoay group key khi kick/ban.",
+            "security_warning": "Mức Strict chỉ cho phép Group B; hãy xác minh fingerprint trước khi dùng.",
             "members": "THÀNH VIÊN",
             "kick": "ĐUỔI",
             "ban": "BAN",
             "no_group": "Chưa có Group Host đang chạy.",
+            "auto_delete": "Tự hủy cục bộ",
+            "auto_off": "Tắt",
+            "auto_30s": "30 giây",
+            "auto_5m": "5 phút",
+
 
         },
         "en": {
@@ -194,13 +201,19 @@ class CloakChatGUI(App):
             "replying": "Replying to message",
             "group_mode": "Chat mode",
             "security_level": "Security level",
-            "group_b_started": "Group B requires a dedicated group-key protocol; it is disabled to prevent downgrade.",
+            "group_b_started": "Group B uses a group key; the relay does not decrypt events during normal forwarding.",
             "group_ready": "Group A is waiting for members; the Host relay can read group content.",
-            "security_warning": "Strict mode requires true Group B E2EE; it cannot run before the group-key protocol is enabled.",
+            "group_b_ready": "Group B is waiting for members; the relay forwards ciphertext and rotates the group key after kick/ban.",
+            "security_warning": "Strict mode permits Group B only; verify the fingerprint before use.",
             "members": "MEMBERS",
             "kick": "KICK",
             "ban": "BAN",
             "no_group": "No Group Host is running.",
+            "auto_delete": "Local auto-delete",
+            "auto_off": "Off",
+            "auto_30s": "30 seconds",
+            "auto_5m": "5 minutes",
+
 
         },
     }
@@ -223,6 +236,8 @@ class CloakChatGUI(App):
         self._role_labels = {}
         self.current_address: Optional[str] = None
         self.incoming_files = {}
+        self.log_entries = []
+        self.auto_delete_seconds = 0
         self.group_host: Optional[GroupHost] = None
         self.group_mode = "DIRECT"
         self.security_level = "BALANCED"
@@ -411,6 +426,21 @@ class CloakChatGUI(App):
         tools.add_widget(self.file_button)
         tools.add_widget(self.members_button)
         root.add_widget(tools)
+        settings_row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(8))
+        self.auto_delete_label = Label(text=self._t("auto_delete"), color=(0.58, 0.65, 0.78, 1), size_hint_x=None, width=dp(135))
+        settings_row.add_widget(self.auto_delete_label)
+        self.auto_delete_spinner = Spinner(
+            text=self._t("auto_off"),
+            values=(self._t("auto_off"), self._t("auto_30s"), self._t("auto_5m")),
+            size_hint_x=None,
+            width=dp(125),
+            background_normal="",
+            background_color=(0.12, 0.18, 0.28, 1),
+            color=(0.92, 0.95, 1, 1),
+        )
+        self.auto_delete_spinner.bind(text=lambda *_: self._auto_delete_changed())
+        settings_row.add_widget(self.auto_delete_spinner)
+        root.add_widget(settings_row)
 
         self.connection_label = Label(
             text=self._t("status_ready"),
@@ -587,6 +617,10 @@ class CloakChatGUI(App):
         self.file_button.text = self._t("file")
         self.members_button.text = self._t("members")
         self.reply_button.text = self._t("reply")
+        self.auto_delete_label.text = self._t("auto_delete")
+        self.auto_delete_spinner.values = (self._t("auto_off"), self._t("auto_30s"), self._t("auto_5m"))
+        self.auto_delete_spinner.text = self._auto_delete_label()
+
         self.nickname_input.hint_text = self._t("nickname")
         self.copy_address_button.text = self._t("copy")
         self.share_address_button.text = self._t("share")
@@ -619,10 +653,38 @@ class CloakChatGUI(App):
             else:
                 self.address.hint_text = self._t("address_host")
 
-    def _append_log(self, text: str):
-        """Cập nhật UI trên main thread của Kivy."""
-        self.chat_log.text += text.rstrip() + "\n"
+    def _auto_delete_label(self) -> str:
+        if self.auto_delete_seconds == 30:
+            return self._t("auto_30s")
+        if self.auto_delete_seconds == 300:
+            return self._t("auto_5m")
+        return self._t("auto_off")
+
+    def _auto_delete_changed(self):
+        value = self.auto_delete_spinner.text
+        if value == self._t("auto_30s"):
+            self.auto_delete_seconds = 30
+        elif value == self._t("auto_5m"):
+            self.auto_delete_seconds = 300
+        else:
+            self.auto_delete_seconds = 0
+
+    def _render_log(self):
+        self.chat_log.text = "\n".join(entry["text"] for entry in self.log_entries) + ("\n" if self.log_entries else "")
         self.chat_log.cursor = (0, len(self.chat_log.text))
+
+    def _expire_log_entry(self, entry_id: str):
+        self.log_entries[:] = [entry for entry in self.log_entries if entry["id"] != entry_id]
+        self._render_log()
+
+    def _append_log(self, text: str, message_id: Optional[str] = None, delete_after: Optional[int] = None):
+        """Cập nhật UI trên main thread; auto-delete chỉ xóa bản sao cục bộ."""
+        entry_id = message_id or secrets.token_hex(8)
+        self.log_entries.append({"id": entry_id, "text": text.rstrip()})
+        self._render_log()
+        lifetime = delete_after if delete_after is not None else self.auto_delete_seconds
+        if lifetime > 0 and message_id:
+            Clock.schedule_once(lambda _dt, eid=entry_id: self._expire_log_entry(eid), lifetime)
 
     def _status_from_worker(self, text: str):
         Clock.schedule_once(lambda _dt: self._append_log(text), 0)
@@ -733,14 +795,14 @@ class CloakChatGUI(App):
         Clock.schedule_once(lambda _dt: self._set_invite_address(address), 0)
         Clock.schedule_once(lambda _dt: self._enable_share_buttons(), 0)
         Clock.schedule_once(self._group_ready, 0)
-        self._status_from_worker(self._t("group_ready"))
+        self._status_from_worker(self._t("group_b_ready" if mode == "B" else "group_ready"))
 
     def _group_ready(self, _dt):
-        self.connection_label.text = self._t("group_ready")
+        self.connection_label.text = self._t("group_b_ready" if self.group_mode == "B" else "group_ready")
         self.message_input.disabled = False
         self.send_button.disabled = False
         self._enable_reactions(True)
-        self.file_button.disabled = self.group_mode == "B"
+        self.file_button.disabled = False
         self.members_button.disabled = False
         self.voice_button.disabled = True
 
@@ -762,7 +824,7 @@ class CloakChatGUI(App):
             self.last_peer_message_id = event.get("id")
             nickname = event.get("nickname", "Peer")
             reply_note = f" ↪ {event['reply_to']}" if event.get("reply_to") else ""
-            Clock.schedule_once(lambda _dt: self._append_log(f"{nickname}{reply_note}: {event.get('text', '')}"), 0)
+            Clock.schedule_once(lambda _dt: self._append_log(f"{nickname}{reply_note}: {event.get('text', '')}", message_id=event.get('id')), 0)
             if hasattr(self, "reply_button"):
                 Clock.schedule_once(lambda _dt: setattr(self.reply_button, "disabled", False), 0)
         elif event_type == "reaction":
@@ -970,7 +1032,7 @@ class CloakChatGUI(App):
         self.last_peer_message_id = event["id"]
         nickname = event.get("nickname") or getattr(self.session, "peer_nickname", "Peer")
         reply_note = f" ↪ {event['reply_to']}" if event.get("reply_to") else ""
-        Clock.schedule_once(lambda _dt: self._append_log(f"{nickname}{reply_note}: {event['text']}"), 0)
+        Clock.schedule_once(lambda _dt: self._append_log(f"{nickname}{reply_note}: {event['text']}", message_id=event['id']), 0)
         if hasattr(self, "reply_button"):
             Clock.schedule_once(lambda _dt: setattr(self.reply_button, "disabled", False), 0)
 
@@ -1230,10 +1292,10 @@ class CloakChatGUI(App):
             return
         try:
             if self.group_host:
-                self.group_host.send_message(message, reply_to=self.reply_to_id)
+                message_id = self.group_host.send_message(message, reply_to=self.reply_to_id)
             else:
-                self.session.send_text(message, reply_to=self.reply_to_id)
-            self._append_log(f"{self.nickname_input.text.strip() or 'Anonymous'}: {message}")
+                message_id = self.session.send_text(message, reply_to=self.reply_to_id)
+            self._append_log(f"{self.nickname_input.text.strip() or 'Anonymous'}: {message}", message_id=message_id)
             self.message_input.text = ""
             self.reply_to_id = None
             self.message_input.hint_text = self._t("message_hint")

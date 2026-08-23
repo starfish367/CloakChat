@@ -1015,7 +1015,7 @@ class ChatSession:
         finally:
             self.stop_event.set()
 
-    def send_text(self, message: str, reply_to: Optional[str] = None) -> None:
+    def send_text(self, message: str, reply_to: Optional[str] = None) -> str:
         if self.session_key is None:
             raise RuntimeError("Phiên chưa hoàn tất handshake.")
         if self.group_mode:
@@ -1026,7 +1026,11 @@ class ChatSession:
                 event["reply_to"] = str(reply_to)
             self._send(encrypt_group_event(self.group_key, event))
         else:
-            self._send(encrypt_chat_message(self.session_key, message, self.nickname, reply_to=reply_to))
+            event = {"v": 1, "id": secrets.token_hex(16), "text": message.strip(), "nickname": self.nickname}
+            if reply_to:
+                event["reply_to"] = str(reply_to)
+            self._send(encrypt_chat_message(self.session_key, message, self.nickname, message_id=event["id"], reply_to=reply_to))
+        return event["id"]
 
     def send_reaction(self, reaction: str, message_id: Optional[str] = None) -> None:
         if self.session_key is None:

@@ -204,7 +204,7 @@ class GroupHost:
         with self.lock:
             return list(self.sessions.values())
 
-    def send_message(self, text: str, reply_to: Optional[str] = None) -> None:
+    def send_message(self, text: str, reply_to: Optional[str] = None) -> str:
         event = {"v": 1, "id": secrets.token_hex(16), "text": text, "nickname": self.nickname}
         if reply_to:
             event["reply_to"] = str(reply_to)
@@ -218,6 +218,7 @@ class GroupHost:
                     session.send_chat_event(event)
             except (ConnectionError, OSError, RuntimeError):
                 pass
+        return event["id"]
 
     def send_reaction(self, reaction: str, message_id: Optional[str] = None) -> None:
         event = {"v": 1, "reaction": reaction, "message_id": str(message_id or "")}
