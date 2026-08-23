@@ -32,6 +32,8 @@ from __future__ import annotations
 import atexit
 import hashlib
 import os
+import json
+import secrets
 import shutil
 import signal
 import socket
@@ -77,6 +79,9 @@ ONION_PUBLICATION_TIMEOUT = 180.0
 MAX_FRAME_SIZE = 1_048_576
 MAX_MESSAGE_BYTES = 64 * 1024
 MAX_VOICE_FRAME_BYTES = 4096
+MAX_NICKNAME_BYTES = 64
+MAX_FILE_SIZE = 25 * 1024 * 1024
+MAX_FILE_CHUNK_BYTES = 48 * 1024
 
 PACKET_HANDSHAKE = 0x01
 PACKET_MESSAGE = 0x02
@@ -84,10 +89,19 @@ PACKET_CONFIRM = 0x03
 PACKET_CLOSE = 0x04
 PACKET_REACTION = 0x05
 PACKET_VOICE = 0x06
+PACKET_PROFILE = 0x07
+PACKET_FILE = 0x08
+PACKET_GROUP_KEY = 0x09
+PACKET_GROUP_EVENT = 0x0A
 
 AAD_MESSAGE = PROTOCOL_VERSION + b"|message"
 AAD_REACTION = PROTOCOL_VERSION + b"|reaction"
 AAD_VOICE = PROTOCOL_VERSION + b"|voice"
+AAD_PROFILE = PROTOCOL_VERSION + b"|profile"
+AAD_FILE = PROTOCOL_VERSION + b"|file"
+AAD_GROUP_KEY = PROTOCOL_VERSION + b"|group-key"
+AAD_GROUP_EVENT = PROTOCOL_VERSION + b"|group-event"
+FILE_HEADER = struct.Struct("!B16sQIIH32s")
 
 _PRINT_LOCK = threading.Lock()
 _SHUTDOWN = threading.Event()
@@ -455,13 +469,26 @@ def recv_packet(sock: socket.socket) -> bytes:
     return recv_exact(sock, length)
 
 
-def safety_number(local_public: bytes, remote_public: bytes) -> str:
-    """Tạo Safety Number 30 chữ số từ hai public key đã sắp xếp theo bytes."""
+def public_key_fingerprint(public_key: bytes) -> str:
+    """Fingerprint SHA-512 của một public key, dùng cho identity/group member ID."""
+    if len(public_key) != 32:
+        raise ValueError("Public key phải có đúng 32 byte.")
+    digest = hashlib.sha512(public_key).hexdigest()
+    return "SHA512:" + ":".join(digest[index : index + 16] for index in range(0, len(digest), 16))
+
+
+def sha512_fingerprint(local_public: bytes, remote_public: bytes) -> str:
+    """Tạo fingerprint SHA-512 ổn định từ hai public key X25519 đã sắp xếp."""
+    if len(local_public) != 32 or len(remote_public) != 32:
+        raise ValueError("Public key phải có đúng 32 byte.")
     first, second = sorted((local_public, remote_public))
-    digest = hashlib.sha256(first + second).digest()
-    number = int.from_bytes(digest, "big") % (10**30)
-    digits = f"{number:030d}"
-    return " ".join(digits[index : index + 5] for index in range(0, 30, 5))
+    digest = hashlib.sha512(first + second).hexdigest()
+    return "SHA512:" + ":".join(digest[index : index + 16] for index in range(0, len(digest), 16))
+
+
+def safety_number(local_public: bytes, remote_public: bytes) -> str:
+    """Tương thích ngược: Safety Number nay là fingerprint SHA-512."""
+    return sha512_fingerprint(local_public, remote_public)
 
 
 def derive_session_key(private_key: X25519PrivateKey, remote_public: bytes) -> bytes:
@@ -479,6 +506,27 @@ def derive_session_key(private_key: X25519PrivateKey, remote_public: bytes) -> b
         raise ProtocolError(f"Không thể dẫn xuất khóa phiên: {exc}") from exc
 
 
+def encrypt_chat_message(
+    key: bytes,
+    message: str,
+    nickname: str = "Anonymous",
+    message_id: Optional[str] = None,
+    reply_to: Optional[str] = None,
+) -> bytes:
+    value = message.strip()
+    if not value or len(value.encode("utf-8")) > MAX_MESSAGE_BYTES:
+        raise ValueError("Tin nhắn phải có từ 1 đến 64 KiB UTF-8.")
+    sender = nickname.strip() or "Anonymous"
+    if len(sender.encode("utf-8")) > MAX_NICKNAME_BYTES:
+        raise ValueError("Nickname vượt quá 64 byte UTF-8.")
+    event = {"v": 1, "id": message_id or secrets.token_hex(16), "text": value, "nickname": sender}
+    if reply_to:
+        event["reply_to"] = str(reply_to)
+    plaintext = json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    nonce = os.urandom(12)
+    return bytes([PACKET_MESSAGE]) + nonce + AESGCM(key).encrypt(nonce, plaintext, AAD_MESSAGE)
+
+
 def encrypt_message(key: bytes, message: str) -> bytes:
     plaintext = message.encode("utf-8")
     if not plaintext or len(plaintext) > MAX_MESSAGE_BYTES:
@@ -486,6 +534,29 @@ def encrypt_message(key: bytes, message: str) -> bytes:
     nonce = os.urandom(12)
     ciphertext = AESGCM(key).encrypt(nonce, plaintext, AAD_MESSAGE)
     return bytes([PACKET_MESSAGE]) + nonce + ciphertext
+
+
+def decrypt_message_event(key: bytes, packet: bytes) -> dict:
+    if len(packet) < 1 + 12 + 16 or packet[0] != PACKET_MESSAGE:
+        raise ProtocolError("Gói tin tin nhắn không hợp lệ.")
+    nonce = packet[1:13]
+    ciphertext = packet[13:]
+    if len(ciphertext) > MAX_MESSAGE_BYTES + 512:
+        raise ProtocolError("Tin nhắn nhận được vượt quá giới hạn.")
+    try:
+        plaintext = AESGCM(key).decrypt(nonce, ciphertext, AAD_MESSAGE)
+    except Exception as exc:
+        raise ProtocolError("Xác thực AES-GCM thất bại; dữ liệu có thể đã bị sửa đổi hoặc sai khóa.") from exc
+    try:
+        event = json.loads(plaintext.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"v": 0, "id": secrets.token_hex(16), "text": plaintext.decode("utf-8", errors="strict"), "nickname": "Peer"}
+    if not isinstance(event, dict) or event.get("v") != 1 or not isinstance(event.get("id"), str) or not isinstance(event.get("text"), str):
+        raise ProtocolError("Envelope tin nhắn không hợp lệ.")
+    event["nickname"] = str(event.get("nickname") or "Peer")
+    if "reply_to" in event and not isinstance(event["reply_to"], str):
+        raise ProtocolError("Reply metadata không hợp lệ.")
+    return event
 
 
 def decrypt_message(key: bytes, packet: bytes) -> str:
@@ -516,6 +587,32 @@ def encrypt_reaction(key: bytes, reaction: str) -> bytes:
     )
 
 
+def encrypt_reaction_event(key: bytes, reaction: str, message_id: Optional[str] = None) -> bytes:
+    value = reaction.strip()
+    if not value or len(value.encode("utf-8")) > 32:
+        raise ValueError("Reaction không hợp lệ.")
+    event = {"v": 1, "reaction": value, "message_id": str(message_id or "")}
+    plaintext = json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    nonce = os.urandom(12)
+    return bytes([PACKET_REACTION]) + nonce + AESGCM(key).encrypt(nonce, plaintext, AAD_REACTION)
+
+
+def decrypt_reaction_event(key: bytes, packet: bytes) -> dict:
+    if len(packet) < 1 + 12 + 16 or packet[0] != PACKET_REACTION:
+        raise ProtocolError("Gói reaction không hợp lệ.")
+    try:
+        plaintext = AESGCM(key).decrypt(packet[1:13], packet[13:], AAD_REACTION)
+    except Exception as exc:
+        raise ProtocolError("Xác thực reaction thất bại.") from exc
+    try:
+        event = json.loads(plaintext.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"v": 0, "reaction": plaintext.decode("utf-8"), "message_id": ""}
+    if not isinstance(event, dict) or event.get("v") != 1 or not isinstance(event.get("reaction"), str) or not isinstance(event.get("message_id"), str):
+        raise ProtocolError("Reaction event không hợp lệ.")
+    return event
+
+
 def decrypt_reaction(key: bytes, packet: bytes) -> str:
     if len(packet) < 1 + 12 + 16 or packet[0] != PACKET_REACTION:
         raise ProtocolError("Gói reaction không hợp lệ.")
@@ -523,6 +620,122 @@ def decrypt_reaction(key: bytes, packet: bytes) -> str:
         return AESGCM(key).decrypt(packet[1:13], packet[13:], AAD_REACTION).decode("utf-8")
     except Exception as exc:
         raise ProtocolError("Xác thực reaction thất bại.") from exc
+
+
+def encrypt_group_key(pairwise_key: bytes, group_key: bytes) -> bytes:
+    if len(group_key) != 32:
+        raise ValueError("Group key phải có 32 byte.")
+    nonce = os.urandom(12)
+    return bytes([PACKET_GROUP_KEY]) + nonce + AESGCM(pairwise_key).encrypt(nonce, group_key, AAD_GROUP_KEY)
+
+
+def decrypt_group_key(pairwise_key: bytes, packet: bytes) -> bytes:
+    if len(packet) != 1 + 12 + 32 + 16 or packet[0] != PACKET_GROUP_KEY:
+        raise ProtocolError("Gói group key không hợp lệ.")
+    try:
+        return AESGCM(pairwise_key).decrypt(packet[1:13], packet[13:], AAD_GROUP_KEY)
+    except Exception as exc:
+        raise ProtocolError("Xác thực group key thất bại.") from exc
+
+
+def encrypt_group_event(group_key: bytes, event: dict) -> bytes:
+    if len(group_key) != 32 or not isinstance(event, dict):
+        raise ValueError("Group event không hợp lệ.")
+    plaintext = json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if len(plaintext) > MAX_MESSAGE_BYTES:
+        raise ValueError("Group event vượt quá giới hạn.")
+    nonce = os.urandom(12)
+    return bytes([PACKET_GROUP_EVENT]) + nonce + AESGCM(group_key).encrypt(nonce, plaintext, AAD_GROUP_EVENT)
+
+
+def decrypt_group_event(group_key: bytes, packet: bytes) -> dict:
+    if len(packet) < 1 + 12 + 16 or packet[0] != PACKET_GROUP_EVENT:
+        raise ProtocolError("Gói group event không hợp lệ.")
+    try:
+        event = json.loads(AESGCM(group_key).decrypt(packet[1:13], packet[13:], AAD_GROUP_EVENT).decode("utf-8"))
+    except Exception as exc:
+        raise ProtocolError("Xác thực group event thất bại.") from exc
+    if not isinstance(event, dict) or event.get("v") != 1 or not isinstance(event.get("type"), str):
+        raise ProtocolError("Group event không hợp lệ.")
+    return event
+
+
+def encrypt_profile(key: bytes, nickname: str) -> bytes:
+    value = nickname.strip()
+    encoded = value.encode("utf-8")
+    if not value or len(encoded) > MAX_NICKNAME_BYTES:
+        raise ValueError("Nickname phải có từ 1 đến 64 byte UTF-8.")
+    nonce = os.urandom(12)
+    return bytes([PACKET_PROFILE]) + nonce + AESGCM(key).encrypt(nonce, encoded, AAD_PROFILE)
+
+
+def decrypt_profile(key: bytes, packet: bytes) -> str:
+    if len(packet) < 1 + 12 + 16 or packet[0] != PACKET_PROFILE:
+        raise ProtocolError("Gói nickname không hợp lệ.")
+    ciphertext = packet[13:]
+    if len(ciphertext) > MAX_NICKNAME_BYTES + 16:
+        raise ProtocolError("Nickname vượt quá giới hạn.")
+    try:
+        value = AESGCM(key).decrypt(packet[1:13], ciphertext, AAD_PROFILE).decode("utf-8").strip()
+    except Exception as exc:
+        raise ProtocolError("Xác thực nickname thất bại.") from exc
+    if not value:
+        raise ProtocolError("Nickname rỗng.")
+    return value
+
+
+def encrypt_file_chunk(
+    key: bytes,
+    transfer_id: bytes,
+    filename: str,
+    total_size: int,
+    chunk_index: int,
+    total_chunks: int,
+    file_digest: bytes,
+    chunk: bytes,
+) -> bytes:
+    """Mã hóa một chunk file; metadata được xác thực cùng ciphertext."""
+    safe_name = Path(filename).name.strip() or "received_file"
+    name_bytes = safe_name.encode("utf-8")
+    if len(transfer_id) != 16 or len(file_digest) != 32:
+        raise ValueError("Metadata file không hợp lệ.")
+    if not (1 <= total_size <= MAX_FILE_SIZE):
+        raise ValueError("File vượt quá giới hạn 25 MiB.")
+    if not (0 <= chunk_index < total_chunks) or not (1 <= total_chunks <= (MAX_FILE_SIZE + MAX_FILE_CHUNK_BYTES - 1) // MAX_FILE_CHUNK_BYTES):
+        raise ValueError("Chỉ số chunk không hợp lệ.")
+    if len(name_bytes) > 255 or not chunk or len(chunk) > MAX_FILE_CHUNK_BYTES:
+        raise ValueError("Chunk hoặc tên file không hợp lệ.")
+    plaintext = FILE_HEADER.pack(1, transfer_id, total_size, chunk_index, total_chunks, len(name_bytes), file_digest) + name_bytes + chunk
+    nonce = os.urandom(12)
+    return bytes([PACKET_FILE]) + nonce + AESGCM(key).encrypt(nonce, plaintext, AAD_FILE)
+
+
+def decrypt_file_chunk(key: bytes, packet: bytes) -> dict:
+    if len(packet) < 1 + 12 + 16 + FILE_HEADER.size:
+        raise ProtocolError("Gói file không hợp lệ.")
+    if packet[0] != PACKET_FILE:
+        raise ProtocolError("Sai loại gói file.")
+    try:
+        plaintext = AESGCM(key).decrypt(packet[1:13], packet[13:], AAD_FILE)
+    except Exception as exc:
+        raise ProtocolError("Xác thực chunk file thất bại.") from exc
+    if len(plaintext) < FILE_HEADER.size:
+        raise ProtocolError("Metadata file bị thiếu.")
+    version, transfer_id, total_size, chunk_index, total_chunks, name_len, file_digest = FILE_HEADER.unpack_from(plaintext)
+    if version != 1 or total_size > MAX_FILE_SIZE or not (1 <= total_chunks <= (MAX_FILE_SIZE + MAX_FILE_CHUNK_BYTES - 1) // MAX_FILE_CHUNK_BYTES):
+        raise ProtocolError("Metadata file vượt giới hạn.")
+    name_start = FILE_HEADER.size
+    name_end = name_start + name_len
+    if name_end > len(plaintext) or name_len > 255:
+        raise ProtocolError("Tên file không hợp lệ.")
+    try:
+        filename = Path(plaintext[name_start:name_end].decode("utf-8")).name or "received_file"
+    except Exception as exc:
+        raise ProtocolError("Tên file không giải mã được.") from exc
+    chunk = plaintext[name_end:]
+    if not chunk or len(chunk) > MAX_FILE_CHUNK_BYTES or chunk_index >= total_chunks:
+        raise ProtocolError("Kích thước/chỉ số chunk không hợp lệ.")
+    return {"transfer_id": transfer_id, "filename": filename, "total_size": total_size, "chunk_index": chunk_index, "total_chunks": total_chunks, "file_digest": file_digest, "chunk": chunk}
 
 
 def encrypt_voice_frame(key: bytes, frame: bytes) -> bytes:
@@ -615,17 +828,40 @@ class ChatSession:
         is_host: bool,
         confirm_callback: Optional[Callable[[str], bool]] = None,
         message_callback: Optional[Callable[[str], None]] = None,
+        message_event_callback: Optional[Callable[[dict], None]] = None,
         reaction_callback: Optional[Callable[[str], None]] = None,
+        reaction_event_callback: Optional[Callable[[dict], None]] = None,
         voice_callback: Optional[Callable[[bytes], None]] = None,
         status_callback: Optional[Callable[[str], None]] = None,
+        nickname: str = "Anonymous",
+        profile_callback: Optional[Callable[[str], None]] = None,
+        file_callback: Optional[Callable[[dict], None]] = None,
+        group_mode: bool = False,
+        relay_mode: bool = False,
+        group_event_callback: Optional[Callable[[dict], None]] = None,
+        raw_group_callback: Optional[Callable[[bytes], None]] = None,
+        group_key_callback: Optional[Callable[[], None]] = None,
     ) -> None:
         self.connection = connection
         self.is_host = is_host
         self.confirm_callback = confirm_callback
         self.message_callback = message_callback
+        self.message_event_callback = message_event_callback
         self.reaction_callback = reaction_callback
+        self.reaction_event_callback = reaction_event_callback
         self.voice_callback = voice_callback
         self.status_callback = status_callback
+        self.nickname = nickname.strip() or "Anonymous"
+        self.profile_callback = profile_callback
+        self.file_callback = file_callback
+        self.group_mode = group_mode
+        self.relay_mode = relay_mode
+        self.group_key: Optional[bytes] = None
+        self.group_event_callback = group_event_callback
+        self.raw_group_callback = raw_group_callback
+        self.group_key_callback = group_key_callback
+        self.peer_nickname = "Peer"
+        self.remote_public: Optional[bytes] = None
         self.private_key = X25519PrivateKey.generate()
         self.local_public = self.private_key.public_key().public_bytes(
             encoding=serialization.Encoding.Raw,
@@ -657,6 +893,7 @@ class ChatSession:
         ):
             raise ProtocolError("Handshake nhận được không hợp lệ.")
         remote_public = remote_packet[1:]
+        self.remote_public = remote_public
         self.session_key = derive_session_key(self.private_key, remote_public)
         number = safety_number(self.local_public, remote_public)
 
@@ -686,6 +923,7 @@ class ChatSession:
             raise PermissionError(
                 "Safety Number chưa được cả hai phía xác nhận; kết nối đã bị đóng."
             )
+        self._send(encrypt_profile(self.session_key, self.nickname))
         self.connection.settimeout(None)
         self._status("[+] Safety Number đã được cả hai phía xác nhận.")
 
@@ -704,26 +942,62 @@ class ChatSession:
                 if packet[0] == PACKET_MESSAGE:
                     if self.session_key is None:
                         raise ProtocolError("Chưa có khóa phiên.")
-                    message = decrypt_message(self.session_key, packet)
-                    if self.message_callback is not None:
-                        self.message_callback(message)
+                    event = decrypt_message_event(self.session_key, packet)
+                    if self.message_event_callback is not None:
+                        self.message_event_callback(event)
+                    elif self.message_callback is not None:
+                        self.message_callback(event["text"])
                     else:
-                        safe_print(f"\n[Peer] {message}")
+                        safe_print(f"\n[{event.get('nickname', 'Peer')}] {event.get('text', '')}")
                         safe_print("[Bạn] ",)
                 elif packet[0] == PACKET_REACTION:
                     if self.session_key is None:
                         raise ProtocolError("Chưa có khóa phiên.")
-                    reaction = decrypt_reaction(self.session_key, packet)
-                    if self.reaction_callback is not None:
-                        self.reaction_callback(reaction)
+                    reaction_event = decrypt_reaction_event(self.session_key, packet)
+                    if self.reaction_event_callback is not None:
+                        self.reaction_event_callback(reaction_event)
+                    elif self.reaction_callback is not None:
+                        self.reaction_callback(reaction_event["reaction"])
                     else:
-                        safe_print(f"\n[Peer reaction] {reaction}")
+                        safe_print(f"\n[Peer reaction] {reaction_event['reaction']}")
                 elif packet[0] == PACKET_VOICE:
                     if self.session_key is None:
                         raise ProtocolError("Chưa có khóa phiên.")
                     frame = decrypt_voice_frame(self.session_key, packet)
                     if self.voice_callback is not None:
                         self.voice_callback(frame)
+                elif packet[0] == PACKET_GROUP_KEY:
+                    if self.session_key is None:
+                        raise ProtocolError("Chưa có khóa phiên.")
+                    self.group_key = decrypt_group_key(self.session_key, packet)
+                    self.group_mode = True
+                    if self.group_key_callback is not None:
+                        self.group_key_callback()
+                elif packet[0] == PACKET_GROUP_EVENT:
+                    if self.group_mode and self.raw_group_callback is not None:
+                        self.raw_group_callback(packet)
+                    elif self.group_key is not None:
+                        event = decrypt_group_event(self.group_key, packet)
+                        if self.group_event_callback is not None:
+                            self.group_event_callback(event)
+                    else:
+                        raise ProtocolError("Nhận group event trước group key.")
+                elif packet[0] == PACKET_PROFILE:
+                    if self.session_key is None:
+                        raise ProtocolError("Chưa có khóa phiên.")
+                    self.peer_nickname = decrypt_profile(self.session_key, packet)
+                    if self.profile_callback is not None:
+                        self.profile_callback(self.peer_nickname)
+                elif packet[0] == PACKET_FILE:
+                    if self.group_mode and self.relay_mode and self.raw_group_callback is not None:
+                        self.raw_group_callback(packet)
+                        continue
+                    file_key = self.group_key if self.group_mode else self.session_key
+                    if file_key is None:
+                        raise ProtocolError("Chưa có khóa file/group.")
+                    file_info = decrypt_file_chunk(file_key, packet)
+                    if self.file_callback is not None:
+                        self.file_callback(file_info)
                 elif packet == bytes([PACKET_CLOSE]):
                     safe_print("\n[!] Peer đã đóng phiên chat.")
                     break
@@ -741,20 +1015,83 @@ class ChatSession:
         finally:
             self.stop_event.set()
 
-    def send_text(self, message: str) -> None:
+    def send_text(self, message: str, reply_to: Optional[str] = None) -> None:
         if self.session_key is None:
             raise RuntimeError("Phiên chưa hoàn tất handshake.")
-        self._send(encrypt_message(self.session_key, message))
+        if self.group_mode:
+            if self.group_key is None:
+                raise RuntimeError("Group key chưa sẵn sàng.")
+            event = {"v": 1, "type": "message", "id": secrets.token_hex(16), "text": message.strip(), "nickname": self.nickname}
+            if reply_to:
+                event["reply_to"] = str(reply_to)
+            self._send(encrypt_group_event(self.group_key, event))
+        else:
+            self._send(encrypt_chat_message(self.session_key, message, self.nickname, reply_to=reply_to))
 
-    def send_reaction(self, reaction: str) -> None:
+    def send_reaction(self, reaction: str, message_id: Optional[str] = None) -> None:
         if self.session_key is None:
             raise RuntimeError("Phiên chưa hoàn tất handshake.")
-        self._send(encrypt_reaction(self.session_key, reaction))
+        if self.group_mode:
+            if self.group_key is None:
+                raise RuntimeError("Group key chưa sẵn sàng.")
+            self._send(encrypt_group_event(self.group_key, {"v": 1, "type": "reaction", "reaction": reaction, "message_id": str(message_id or "")}))
+        else:
+            self._send(encrypt_reaction_event(self.session_key, reaction, message_id))
+
+    def send_group_key(self, group_key: bytes) -> None:
+        if self.session_key is None:
+            raise RuntimeError("Phiên chưa hoàn tất handshake.")
+        self.group_key = group_key
+        self._send(encrypt_group_key(self.session_key, group_key))
+
+    def send_group_packet(self, packet: bytes) -> None:
+        if self.group_key is None or not packet or packet[0] not in (PACKET_GROUP_EVENT, PACKET_FILE):
+            raise RuntimeError("Group key hoặc group packet chưa sẵn sàng.")
+        self._send(packet)
+
+    def send_chat_event(self, event: dict) -> None:
+        if self.session_key is None:
+            raise RuntimeError("Phiên chưa hoàn tất handshake.")
+        self._send(encrypt_chat_message(self.session_key, event["text"], event.get("nickname", "Peer"), event.get("id"), event.get("reply_to")))
+
+    def send_reaction_event(self, event: dict) -> None:
+        if self.session_key is None:
+            raise RuntimeError("Phiên chưa hoàn tất handshake.")
+        self._send(encrypt_reaction_event(self.session_key, event["reaction"], event.get("message_id")))
+
+    def send_file_chunk(self, info: dict) -> None:
+        file_key = self.group_key if self.group_mode else self.session_key
+        if file_key is None:
+            raise RuntimeError("Phiên chưa hoàn tất handshake/group key.")
+        self._send(encrypt_file_chunk(file_key, info["transfer_id"], info["filename"], info["total_size"], info["chunk_index"], info["total_chunks"], info["file_digest"], info["chunk"]))
 
     def send_voice_frame(self, frame: bytes) -> None:
         if self.session_key is None:
             raise RuntimeError("Phiên chưa hoàn tất handshake.")
         self._send(encrypt_voice_frame(self.session_key, frame))
+
+    def send_file(self, path: str) -> None:
+        """Đọc file hai lần: hash trước, sau đó gửi từng chunk đã mã hóa."""
+        file_key = self.group_key if self.group_mode else self.session_key
+        if file_key is None:
+            raise RuntimeError("Phiên chưa hoàn tất handshake/group key.")
+        source = Path(path).expanduser().resolve()
+        if not source.is_file():
+            raise FileNotFoundError(str(source))
+        total_size = source.stat().st_size
+        if not (1 <= total_size <= MAX_FILE_SIZE):
+            raise ValueError("File phải có kích thước từ 1 đến 25 MiB.")
+        file_digest = hashlib.sha256()
+        with source.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                file_digest.update(block)
+        digest = file_digest.digest()
+        total_chunks = (total_size + MAX_FILE_CHUNK_BYTES - 1) // MAX_FILE_CHUNK_BYTES
+        transfer_id = os.urandom(16)
+        with source.open("rb") as handle:
+            for chunk_index in range(total_chunks):
+                chunk = handle.read(MAX_FILE_CHUNK_BYTES)
+                self._send(encrypt_file_chunk(file_key, transfer_id, source.name, total_size, chunk_index, total_chunks, digest, chunk))
 
     def close(self, notify_peer: bool = True) -> None:
         if self.stop_event.is_set():
@@ -961,26 +1298,68 @@ def run_join_lan() -> None:
 
 def run_chat(connection: socket.socket, is_host: bool) -> None:
     global _ACTIVE_SESSION
-    session = ChatSession(connection, is_host=is_host)
+    nickname = input("Nickname của bạn (mặc định Anonymous): ").strip() or "Anonymous"
+    last_message_id: Optional[str] = None
+    received_dir = Path.cwd() / "received_files"
+
+    def on_event(event: dict) -> None:
+        nonlocal last_message_id
+        last_message_id = event.get("id")
+        reply_note = f" ↪ {event['reply_to']}" if event.get("reply_to") else ""
+        safe_print(f"\n[{event.get('nickname', 'Peer')}]{reply_note}: {event.get('text', '')}")
+
+    def on_reaction(event: dict) -> None:
+        target = f" ({event['message_id'][:8]})" if event.get("message_id") else ""
+        safe_print(f"\n[Peer reaction{target}] {event.get('reaction', '')}")
+
+    def on_profile(peer_nickname: str) -> None:
+        safe_print(f"\n[*] Peer nickname: {peer_nickname}")
+
+    def on_file(info: dict) -> None:
+        received_dir.mkdir(parents=True, exist_ok=True)
+        target = received_dir / info["filename"]
+        if target.exists():
+            target = received_dir / f"{target.stem}_{secrets.token_hex(4)}{target.suffix}"
+        target.write_bytes(info["chunk"])
+        safe_print(f"\n[+] Đã nhận chunk file {info['chunk_index'] + 1}/{info['total_chunks']}: {target}")
+
+    session = ChatSession(
+        connection,
+        is_host=is_host,
+        message_event_callback=on_event,
+        reaction_event_callback=on_reaction,
+        profile_callback=on_profile,
+        file_callback=on_file,
+        nickname=nickname,
+    )
     _ACTIVE_SESSION = session
     try:
         session.handshake_and_confirm()
         session.start_receiver()
-        safe_print("\n[*] Chat đã bắt đầu. Gõ tin nhắn và nhấn Enter; gõ 'exit' để thoát.")
+        safe_print("\n[*] Chat đã bắt đầu. Lệnh: /file PATH, /reply TEXT, /react EMOJI, exit.")
         while not session.stop_event.is_set():
             try:
-                text = input("[Bạn] ")
+                text = input(f"[{nickname}] ")
             except EOFError:
                 text = "exit"
+            command, _, argument = text.partition(" ")
             if text.strip().lower() == "exit":
                 break
-            if not text:
+            if not text.strip():
                 continue
             try:
-                session.send_text(text)
-            except (ConnectionError, OSError) as exc:
-                safe_print(f"[!] Không thể gửi tin nhắn: {exc}")
-                break
+                if command == "/file" and argument.strip():
+                    session.send_file(argument.strip())
+                elif command == "/react" and argument.strip():
+                    session.send_reaction(argument.strip(), message_id=last_message_id)
+                elif command == "/reply" and argument.strip():
+                    session.send_text(argument.strip(), reply_to=last_message_id)
+                else:
+                    session.send_text(text)
+            except (ConnectionError, OSError, RuntimeError, ValueError, FileNotFoundError) as exc:
+                safe_print(f"[!] Không thể gửi dữ liệu: {exc}")
+                if isinstance(exc, (ConnectionError, OSError)):
+                    break
     finally:
         session.close(notify_peer=True)
         _ACTIVE_SESSION = None
@@ -1116,10 +1495,20 @@ __all__ = [
     "create_orbot_join_socket",
     "create_public_socket",
     "decrypt_message",
+    "decrypt_message_event",
     "decrypt_reaction",
+    "decrypt_reaction_event",
+    "decrypt_profile",
+    "decrypt_file_chunk",
     "derive_session_key",
+    "public_key_fingerprint",
+    "sha512_fingerprint",
     "encrypt_message",
+    "encrypt_chat_message",
     "encrypt_reaction",
+    "encrypt_reaction_event",
+    "encrypt_profile",
+    "encrypt_file_chunk",
     "encrypt_voice_frame",
     "decrypt_voice_frame",
     "main",

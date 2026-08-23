@@ -17,6 +17,10 @@ app.transport.text = "Orbot SOCKS5"
 app.role.text = "Join"
 assert app._transport_key() == "ORBOT"
 assert app._role_key() == "JOIN"
+app.group_mode_spinner.text = app._group_mode_value("A")
+app.security_level_spinner.text = app._security_value("BALANCED")
+assert app._group_mode_key() == "A"
+assert app._security_key() == "BALANCED"
 app.current_address = "example.onion"
 app._set_invite_address(app.current_address)
 assert "example.onion" in app.invite_address_label.text

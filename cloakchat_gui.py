@@ -9,6 +9,7 @@ và chạy các thao tác blocking trên worker thread để UI không bị treo
 from __future__ import annotations
 
 import atexit
+import hashlib
 import os
 import socket
 import sys
@@ -30,7 +31,9 @@ from kivy.graphics import Color, RoundedRectangle
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
+from kivy.uix.filechooser import FileChooserListView
 from kivy.uix.gridlayout import GridLayout
+from kivy.uix.image import Image
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
@@ -44,6 +47,7 @@ from bluetooth_share import share_invite
 from contacts_store import ContactStore
 from invite_utils import create_invite, parse_invite, save_qr
 from voice_chat import VoiceChat
+from group_chat import GroupHost, GroupProtocolError, MODE_HOST_RELAY, MODE_TRUE_E2EE
 
 
 class CloakChatGUI(App):
@@ -54,6 +58,15 @@ class CloakChatGUI(App):
         "PUBLIC": {"vi": "IP công cộng", "en": "Public IP"},
         "TOR": {"vi": "Tor / Onion", "en": "Tor / Onion"},
         "ORBOT": {"vi": "Orbot SOCKS5", "en": "Orbot SOCKS5"},
+    }
+    GROUP_MODE_LABELS = {
+        "DIRECT": {"vi": "2 người", "en": "1–1"},
+        "A": {"vi": "Nhóm A — Host relay", "en": "Group A — Host relay"},
+        "B": {"vi": "Nhóm B — E2EE thật", "en": "Group B — true E2EE"},
+    }
+    SECURITY_LABELS = {
+        "BALANCED": {"vi": "Cân bằng", "en": "Balanced"},
+        "STRICT": {"vi": "Nghiêm ngặt", "en": "Strict"},
     }
     ROLE_LABELS = {
         "HOST": {"vi": "Host", "en": "Host"},
@@ -87,13 +100,13 @@ class CloakChatGUI(App):
             "message_hint": "Viết tin nhắn bảo mật...",
             "status_ready": "●  Sẵn sàng — LAN không dùng Tor, E2EE vẫn bật",
             "status_disconnected": "●  Đã ngắt kết nối — sẵn sàng cho phiên mới",
-            "status_connected": "●  Đã kết nối — E2EE hoạt động — Safety Number đã xác nhận",
+            "status_connected": "●  Đã kết nối — E2EE hoạt động — SHA-512 fingerprint đã xác nhận",
             "log_ready": "Sẵn sàng. Chọn LAN để kết nối nội bộ hoặc Tor để dùng .onion.",
-            "safety_prompt": "Đối chiếu Safety Number với peer qua kênh tin cậy bên ngoài",
-            "safety_question": "Bạn xác nhận hai số trùng nhau?",
+            "safety_prompt": "Đối chiếu SHA-512 fingerprint với peer qua kênh tin cậy bên ngoài",
+            "safety_question": "Bạn xác nhận hai fingerprint trùng khớp hoàn toàn?",
             "yes": "Đúng, xác nhận",
             "no": "Không",
-            "safety_title": "Xác nhận Safety Number",
+            "safety_title": "Xác nhận SHA-512 fingerprint",
             "qr_hint": "Quét QR này để lấy invite CloakChat.",
             "qr_title": "CloakChat QR invite",
             "orbot_join_only": "Orbot SOCKS5 chỉ hỗ trợ Join onion trên Android.",
@@ -106,6 +119,24 @@ class CloakChatGUI(App):
             "shared": "Đã mở bảng chia sẻ.",
             "share_desktop": "Desktop chưa có Sharesheet; địa chỉ đã được sao chép để bạn dán vào ứng dụng khác.",
             "invite_label": "Gửi địa chỉ này cho peer:",
+            "nickname": "Biệt danh của bạn",
+            "file": "TỆP",
+            "choose_file": "Chọn tệp để gửi",
+            "file_sent": "Đã gửi tệp",
+            "file_received": "Đã nhận tệp",
+            "peer_joined": "Peer dùng biệt danh",
+            "reply": "TRẢ LỜI",
+            "replying": "Đang trả lời tin nhắn",
+            "group_mode": "Chế độ chat",
+            "security_level": "Mức bảo mật",
+            "group_b_started": "Group B cần protocol group-key riêng; chưa được bật để tránh downgrade.",
+            "group_ready": "Group A đang chờ thành viên; Host relay giải mã được nội dung.",
+            "security_warning": "Mức Strict yêu cầu Group B E2EE thật; chưa thể chạy khi protocol group-key chưa bật.",
+            "members": "THÀNH VIÊN",
+            "kick": "ĐUỔI",
+            "ban": "BAN",
+            "no_group": "Chưa có Group Host đang chạy.",
+
         },
         "en": {
             "language": "Language",
@@ -134,13 +165,13 @@ class CloakChatGUI(App):
             "message_hint": "Write a secure message...",
             "status_ready": "●  Ready — LAN uses no Tor; E2EE remains on",
             "status_disconnected": "●  Disconnected — ready for a new session",
-            "status_connected": "●  Connected — E2EE active — Safety Number verified",
+            "status_connected": "●  Connected — E2EE active — SHA-512 fingerprint verified",
             "log_ready": "Ready. Choose Direct LAN for local chat or Tor for a .onion session.",
-            "safety_prompt": "Compare the Safety Number with your peer through a trusted channel",
-            "safety_question": "Do both numbers match?",
+            "safety_prompt": "Compare the SHA-512 fingerprint with your peer through a trusted channel",
+            "safety_question": "Do both fingerprints match exactly?",
             "yes": "Yes, confirm",
             "no": "No",
-            "safety_title": "Confirm Safety Number",
+            "safety_title": "Confirm SHA-512 fingerprint",
             "qr_hint": "Scan this QR code to receive the CloakChat invite.",
             "qr_title": "CloakChat QR invite",
             "orbot_join_only": "Orbot SOCKS5 supports onion Join on Android only.",
@@ -153,6 +184,24 @@ class CloakChatGUI(App):
             "shared": "Share sheet opened.",
             "share_desktop": "Desktop has no system share sheet; the address was copied so you can paste it into another app.",
             "invite_label": "Send this address to your peer:",
+            "nickname": "Your nickname",
+            "file": "FILE",
+            "choose_file": "Choose a file to send",
+            "file_sent": "File sent",
+            "file_received": "File received",
+            "peer_joined": "Peer nickname",
+            "reply": "REPLY",
+            "replying": "Replying to message",
+            "group_mode": "Chat mode",
+            "security_level": "Security level",
+            "group_b_started": "Group B requires a dedicated group-key protocol; it is disabled to prevent downgrade.",
+            "group_ready": "Group A is waiting for members; the Host relay can read group content.",
+            "security_warning": "Strict mode requires true Group B E2EE; it cannot run before the group-key protocol is enabled.",
+            "members": "MEMBERS",
+            "kick": "KICK",
+            "ban": "BAN",
+            "no_group": "No Group Host is running.",
+
         },
     }
 
@@ -173,6 +222,12 @@ class CloakChatGUI(App):
         self._transport_labels = {}
         self._role_labels = {}
         self.current_address: Optional[str] = None
+        self.incoming_files = {}
+        self.group_host: Optional[GroupHost] = None
+        self.group_mode = "DIRECT"
+        self.security_level = "BALANCED"
+        self.last_peer_message_id: Optional[str] = None
+        self.reply_to_id: Optional[str] = None
 
     def build(self):
         self.title = "CloakChat"
@@ -230,7 +285,7 @@ class CloakChatGUI(App):
             padding=[dp(12), dp(10)],
             spacing=dp(7),
             size_hint_y=None,
-            height=dp(180),
+            height=dp(312),
         )
         with connection_card.canvas.before:
             Color(0.07, 0.10, 0.16, 1)
@@ -246,7 +301,7 @@ class CloakChatGUI(App):
             height=dp(23),
         )
         connection_card.add_widget(self.connection_header)
-        fields = GridLayout(cols=2, spacing=dp(6), size_hint_y=None, height=dp(75))
+        fields = GridLayout(cols=2, spacing=dp(6), size_hint_y=None, height=dp(150))
         self.network_label = Label(text="Mạng", color=(0.58, 0.65, 0.78, 1), halign="left")
         fields.add_widget(self.network_label)
         self.transport = Spinner(
@@ -273,6 +328,31 @@ class CloakChatGUI(App):
         self.role.bind(text=lambda *_: self._role_changed())
         self.transport.bind(text=lambda *_: self._role_changed())
         fields.add_widget(self.role)
+        self.group_mode_label = Label(text=self._t("group_mode"), color=(0.58, 0.65, 0.78, 1), halign="left")
+        fields.add_widget(self.group_mode_label)
+        self.group_mode_spinner = Spinner(
+            text=self._group_mode_value("DIRECT"),
+            values=tuple(self._group_mode_value(key) for key in ("DIRECT", "A", "B")),
+            size_hint_y=None,
+            height=dp(42),
+            background_normal="",
+            background_color=(0.12, 0.18, 0.28, 1),
+            color=(0.92, 0.95, 1, 1),
+        )
+        self.group_mode_spinner.bind(text=lambda *_: self._role_changed())
+        fields.add_widget(self.group_mode_spinner)
+        self.security_level_label = Label(text=self._t("security_level"), color=(0.58, 0.65, 0.78, 1), halign="left")
+        fields.add_widget(self.security_level_label)
+        self.security_level_spinner = Spinner(
+            text=self._security_value("BALANCED"),
+            values=tuple(self._security_value(key) for key in ("BALANCED", "STRICT")),
+            size_hint_y=None,
+            height=dp(42),
+            background_normal="",
+            background_color=(0.12, 0.18, 0.28, 1),
+            color=(0.92, 0.95, 1, 1),
+        )
+        fields.add_widget(self.security_level_spinner)
         connection_card.add_widget(fields)
 
         self.address = TextInput(
@@ -287,6 +367,19 @@ class CloakChatGUI(App):
             hint_text_color=(0.45, 0.53, 0.67, 1),
         )
         connection_card.add_widget(self.address)
+        self.nickname_input = TextInput(
+            hint_text=self._t("nickname"),
+            text="Anonymous",
+            multiline=False,
+            size_hint_y=None,
+            height=dp(40),
+            padding=[dp(12), dp(10)],
+            background_normal="",
+            background_color=(0.11, 0.15, 0.23, 1),
+            foreground_color=(0.92, 0.95, 1, 1),
+            hint_text_color=(0.45, 0.53, 0.67, 1),
+        )
+        connection_card.add_widget(self.nickname_input)
         root.add_widget(connection_card)
 
         action_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
@@ -307,10 +400,16 @@ class CloakChatGUI(App):
         self.contacts_button.bind(on_press=lambda *_: self.show_contacts())
         self.voice_button = Button(text=self._t("voice"), background_normal="", background_color=(0.12, 0.18, 0.28, 1), disabled=True)
         self.voice_button.bind(on_press=lambda *_: self.toggle_voice())
+        self.file_button = Button(text=self._t("file"), background_normal="", background_color=(0.12, 0.18, 0.28, 1), disabled=True)
+        self.file_button.bind(on_press=lambda *_: self.choose_file())
+        self.members_button = Button(text=self._t("members"), background_normal="", background_color=(0.12, 0.18, 0.28, 1), disabled=True)
+        self.members_button.bind(on_press=lambda *_: self.show_group_members())
         tools.add_widget(self.qr_button)
         tools.add_widget(self.bluetooth_button)
         tools.add_widget(self.contacts_button)
         tools.add_widget(self.voice_button)
+        tools.add_widget(self.file_button)
+        tools.add_widget(self.members_button)
         root.add_widget(tools)
 
         self.connection_label = Label(
@@ -405,8 +504,11 @@ class CloakChatGUI(App):
             hint_text_color=(0.45, 0.53, 0.67, 1),
         )
         self.message_input.bind(on_text_validate=self.send_message)
+        self.reply_button = Button(text=self._t("reply"), size_hint_x=None, width=dp(86), disabled=True, background_normal="", background_color=(0.12, 0.18, 0.28, 1))
+        self.reply_button.bind(on_press=lambda *_: self._prepare_reply())
         self.send_button = Button(text=self._t("send"), size_hint_x=None, width=dp(74), disabled=True, background_normal="", background_color=(0.15, 0.63, 0.48, 1), bold=True)
         self.send_button.bind(on_press=self.send_message)
+        compose.add_widget(self.reply_button)
         compose.add_widget(self.message_input)
         compose.add_widget(self.send_button)
         root.add_widget(compose)
@@ -420,6 +522,24 @@ class CloakChatGUI(App):
 
     def _transport_value(self, key: str) -> str:
         return self.TRANSPORT_LABELS[key][self.language]
+
+    def _group_mode_value(self, key: str) -> str:
+        return self.GROUP_MODE_LABELS[key][self.language]
+
+    def _group_mode_key(self) -> str:
+        for key in ("DIRECT", "A", "B"):
+            if self.group_mode_spinner.text == self._group_mode_value(key):
+                return key
+        return "DIRECT"
+
+    def _security_value(self, key: str) -> str:
+        return self.SECURITY_LABELS[key][self.language]
+
+    def _security_key(self) -> str:
+        for key in ("BALANCED", "STRICT"):
+            if self.security_level_spinner.text == self._security_value(key):
+                return key
+        return "BALANCED"
 
     def _role_value(self, key: str) -> str:
         return self.ROLE_LABELS[key][self.language]
@@ -440,20 +560,34 @@ class CloakChatGUI(App):
             return
         transport_key = self._transport_key()
         role_key = self._role_key()
+        group_key = self._group_mode_key()
+        security_key = self._security_key()
         self.language = language
         self.transport.values = tuple(self._transport_value(key) for key in ("LAN", "PUBLIC", "TOR", "ORBOT"))
         self.transport.text = self._transport_value(transport_key)
         self.role.values = (self._role_value("HOST"), self._role_value("JOIN"))
         self.role.text = self._role_value(role_key)
+        self.group_mode_spinner.values = tuple(self._group_mode_value(key) for key in ("DIRECT", "A", "B"))
+        self.group_mode_spinner.text = self._group_mode_value(group_key)
+        self.security_level_spinner.values = tuple(self._security_value(key) for key in ("BALANCED", "STRICT"))
+        self.security_level_spinner.text = self._security_value(security_key)
+        self.group_mode = group_key
+        self.security_level = security_key
         self.title_label.text = f"[b]CloakChat[/b]\n[size=12][color=#93A4C3]{self._t('subtitle')}[/color][/size]"
         self.connection_header.text = f"[b]{self._t('connection')}[/b]  [color=#93A4C3]{self._t('choose_connection')}[/color]"
         self.network_label.text = self._t("network")
         self.role_label.text = self._t("role")
+        self.group_mode_label.text = self._t("group_mode")
+        self.security_level_label.text = self._t("security_level")
         self.start_button.text = self._t("start")
         self.stop_button.text = self._t("stop")
         self.qr_button.text = self._t("qr")
         self.bluetooth_button.text = self._t("bluetooth")
         self.contacts_button.text = self._t("contacts")
+        self.file_button.text = self._t("file")
+        self.members_button.text = self._t("members")
+        self.reply_button.text = self._t("reply")
+        self.nickname_input.hint_text = self._t("nickname")
         self.copy_address_button.text = self._t("copy")
         self.share_address_button.text = self._t("share")
         if self.voice is None:
@@ -519,8 +653,17 @@ class CloakChatGUI(App):
             is_public = transport_key == "PUBLIC"
             is_orbot = transport_key == "ORBOT"
             is_host = self._role_key() == "HOST"
+            group_mode = self._group_mode_key()
+            security_level = self._security_key()
+            self.group_mode = group_mode
+            self.security_level = security_level
+            if group_mode == "A" and security_level == "STRICT":
+                raise GroupProtocolError(self._t("security_warning"))
             if is_orbot and is_host:
                 raise ValueError(self._t("orbot_join_only"))
+            if is_host and group_mode in ("A", "B"):
+                self._prepare_group_host(is_tor, is_public, group_mode)
+                return
             if is_host:
                 connection = self._prepare_host(is_tor, is_public)
             else:
@@ -534,10 +677,18 @@ class CloakChatGUI(App):
                 is_host=is_host,
                 confirm_callback=self._confirm_safety_number,
                 message_callback=self._message_from_peer,
+                message_event_callback=self._message_event_from_peer,
                 reaction_callback=self._reaction_from_peer,
+                reaction_event_callback=self._reaction_event_from_peer,
+                group_mode=group_mode == "B",
+                group_event_callback=self._group_event_from_peer,
+                group_key_callback=self._group_key_ready,
                 status_callback=self._status_from_worker,
+                nickname=self.nickname_input.text.strip() or "Anonymous",
+                profile_callback=self._profile_from_peer,
+                file_callback=self._file_from_peer,
             )
-            self._status_from_worker("[*] Đang trao đổi khóa và chờ xác nhận Safety Number...")
+            self._status_from_worker("[*] Đang trao đổi khóa và chờ xác nhận SHA-512 fingerprint...")
             self.session.handshake_and_confirm()
             if self.stop_event.is_set():
                 return
@@ -552,6 +703,71 @@ class CloakChatGUI(App):
         except Exception as exc:
             self._status_from_worker(f"[!] Lỗi UI không mong muốn: {exc}")
             self._reset_ui()
+
+    def _prepare_group_host(self, is_tor: bool, is_public: bool = False, mode: str = "A") -> None:
+        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        bind_host = core.SOCKS_HOST if is_tor else "0.0.0.0"
+        self.listener.bind((bind_host, 0))
+        port = self.listener.getsockname()[1]
+        self.listener.listen(8)
+        self.listener.settimeout(1.0)
+        if is_tor:
+            self.daemon = core.TorDaemon()
+            self.daemon.start()
+            address = self.daemon.create_ephemeral_service(port)
+            invite_transport = "tor"
+        elif is_public:
+            public_ip = self.address.text.strip()
+            if not public_ip:
+                raise ValueError("Host IP công cộng cần nhập IP public trước khi bắt đầu.")
+            address = f"{public_ip}:{port}"
+            invite_transport = "public"
+        else:
+            address = f"{core.get_local_ipv4()}:{port}"
+            invite_transport = "lan"
+        self.current_address = address
+        self.current_invite = create_invite(invite_transport, address, "CloakChat Group Host")
+        self.group_host = GroupHost(self.listener, nickname=self.nickname_input.text.strip() or "Host", mode=MODE_TRUE_E2EE if mode == "B" else MODE_HOST_RELAY, confirm_callback=self._confirm_safety_number, status_callback=self._status_from_worker, event_callback=self._group_event_from_host)
+        self.group_host.start()
+        Clock.schedule_once(lambda _dt: self._set_invite_address(address), 0)
+        Clock.schedule_once(lambda _dt: self._enable_share_buttons(), 0)
+        Clock.schedule_once(self._group_ready, 0)
+        self._status_from_worker(self._t("group_ready"))
+
+    def _group_ready(self, _dt):
+        self.connection_label.text = self._t("group_ready")
+        self.message_input.disabled = False
+        self.send_button.disabled = False
+        self._enable_reactions(True)
+        self.file_button.disabled = self.group_mode == "B"
+        self.members_button.disabled = False
+        self.voice_button.disabled = True
+
+    def _group_event_from_host(self, event: dict):
+        if event.get("type") == "profile":
+            self._status_from_worker(f"[GROUP] {event.get('nickname', 'Peer')} joined.")
+        elif event.get("type") == "file_sent":
+            self._status_from_worker(f"[+] {self._t('file_sent')}: {event.get('filename', '')}")
+        elif "text" in event:
+            nickname = event.get("nickname", "Peer")
+            reply_note = f" ↪ {event['reply_to']}" if event.get("reply_to") else ""
+            self._status_from_worker(f"{nickname}{reply_note}: {event['text']}")
+        elif event.get("type") == "reaction":
+            self._status_from_worker(f"Peer reaction: {event.get('reaction', '')}")
+
+    def _group_event_from_peer(self, event: dict):
+        event_type = event.get("type")
+        if event_type == "message":
+            self.last_peer_message_id = event.get("id")
+            nickname = event.get("nickname", "Peer")
+            reply_note = f" ↪ {event['reply_to']}" if event.get("reply_to") else ""
+            Clock.schedule_once(lambda _dt: self._append_log(f"{nickname}{reply_note}: {event.get('text', '')}"), 0)
+            if hasattr(self, "reply_button"):
+                Clock.schedule_once(lambda _dt: setattr(self.reply_button, "disabled", False), 0)
+        elif event_type == "reaction":
+            target = f" ({event['message_id'][:8]})" if event.get("message_id") else ""
+            Clock.schedule_once(lambda _dt: self._append_log(f"Peer reaction{target}: {event.get('reaction', '')}"), 0)
 
     def _prepare_host(self, is_tor: bool, is_public: bool = False) -> socket.socket:
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -748,10 +964,60 @@ class CloakChatGUI(App):
             self.confirm_event.set()
 
     def _message_from_peer(self, message: str):
-        Clock.schedule_once(lambda _dt: self._append_log(f"Peer: {message}"), 0)
+        Clock.schedule_once(lambda _dt: self._append_log(f"{getattr(self.session, 'peer_nickname', 'Peer')}: {message}"), 0)
+
+    def _message_event_from_peer(self, event: dict):
+        self.last_peer_message_id = event["id"]
+        nickname = event.get("nickname") or getattr(self.session, "peer_nickname", "Peer")
+        reply_note = f" ↪ {event['reply_to']}" if event.get("reply_to") else ""
+        Clock.schedule_once(lambda _dt: self._append_log(f"{nickname}{reply_note}: {event['text']}"), 0)
+        if hasattr(self, "reply_button"):
+            Clock.schedule_once(lambda _dt: setattr(self.reply_button, "disabled", False), 0)
+
+    def _prepare_reply(self):
+        if not self.last_peer_message_id:
+            return
+        self.reply_to_id = self.last_peer_message_id
+        self.message_input.hint_text = f"{self._t('replying')} ({self.reply_to_id[:8]})"
+        self.message_input.focus = True
+
+    def _profile_from_peer(self, nickname: str):
+        Clock.schedule_once(lambda _dt: self._append_log(f"[+] {self._t('peer_joined')}: {nickname}"), 0)
 
     def _reaction_from_peer(self, reaction: str):
         Clock.schedule_once(lambda _dt: self._append_log(f"Peer reaction: {reaction}"), 0)
+
+    def _reaction_event_from_peer(self, event: dict):
+        target = f" ({event['message_id'][:8]})" if event.get("message_id") else ""
+        Clock.schedule_once(lambda _dt: self._append_log(f"Peer reaction{target}: {event['reaction']}"), 0)
+
+    def _file_from_peer(self, file_info: dict):
+        transfer_id = file_info["transfer_id"]
+        state = self.incoming_files.setdefault(
+            transfer_id,
+            {"filename": file_info["filename"], "total_size": file_info["total_size"], "total_chunks": file_info["total_chunks"], "file_digest": file_info["file_digest"], "next_index": 0, "data": bytearray()},
+        )
+        if file_info["chunk_index"] != state["next_index"]:
+            self.incoming_files.pop(transfer_id, None)
+            self._status_from_worker("[!] File chunk out of order; transfer discarded.")
+            return
+        state["data"].extend(file_info["chunk"])
+        state["next_index"] += 1
+        if state["next_index"] != state["total_chunks"]:
+            return
+        payload = bytes(state["data"])
+        valid = len(payload) == state["total_size"] and hashlib.sha256(payload).digest() == state["file_digest"]
+        self.incoming_files.pop(transfer_id, None)
+        if not valid:
+            self._status_from_worker("[!] File hash verification failed; file was discarded.")
+            return
+        received_dir = Path(self.user_data_dir) / "received_files"
+        received_dir.mkdir(parents=True, exist_ok=True)
+        target = received_dir / state["filename"]
+        if target.exists():
+            target = received_dir / f"{target.stem}_{int(time.time())}{target.suffix}"
+        target.write_bytes(payload)
+        self._status_from_worker(f"[+] {self._t('file_received')}: {target}")
 
     def _enable_reactions(self, enabled: bool):
         for button in getattr(self, "reaction_buttons", []):
@@ -790,6 +1056,63 @@ class CloakChatGUI(App):
         except Exception as exc:
             self.voice = None
             self._append_log(f"[VOICE] Không thể bật voice: {exc}")
+
+    def choose_file(self):
+        if not self.session and not self.group_host:
+            return
+        chooser = FileChooserListView(path=str(Path.home()), multiselect=False)
+        buttons = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        send_button = Button(text=self._t("send"))
+        cancel_button = Button(text=self._t("no"))
+        buttons.add_widget(send_button)
+        buttons.add_widget(cancel_button)
+        content = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8))
+        content.add_widget(chooser)
+        content.add_widget(buttons)
+        popup = Popup(title=self._t("choose_file"), content=content, size_hint=(0.94, 0.84), auto_dismiss=False)
+        send_button.bind(on_press=lambda *_: self._send_selected_file(chooser, popup))
+        cancel_button.bind(on_press=lambda *_: popup.dismiss())
+        popup.open()
+
+    def _send_selected_file(self, chooser, popup):
+        if not chooser.selection:
+            return
+        path = chooser.selection[0]
+        popup.dismiss()
+        self._append_log(f"[*] {self._t('choose_file')}: {path}")
+        threading.Thread(target=self._send_file_worker, args=(path,), name="cloakchat-file-sender", daemon=True).start()
+
+    def _send_file_worker(self, path: str):
+        try:
+            if self.group_host:
+                self.group_host.send_file(path)
+            else:
+                self.session.send_file(path)
+            self._status_from_worker(f"[+] {self._t('file_sent')}: {Path(path).name}")
+        except Exception as exc:
+            self._status_from_worker(f"[!] File send failed: {exc}")
+
+    def show_group_members(self):
+        if not self.group_host:
+            self._append_log(f"[!] {self._t('no_group')}")
+            return
+        content = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        for member_id, nickname in list(self.group_host.nicknames.items()):
+            row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(5))
+            row.add_widget(Label(text=f"{nickname} ({member_id[:8]})", halign="left"))
+            kick_button = Button(text=self._t("kick"), size_hint_x=None, width=dp(70))
+            ban_button = Button(text=self._t("ban"), size_hint_x=None, width=dp(70))
+            kick_button.bind(on_press=lambda *_btn, mid=member_id: self._moderate_member(mid, False))
+            ban_button.bind(on_press=lambda *_btn, mid=member_id: self._moderate_member(mid, True))
+            row.add_widget(kick_button)
+            row.add_widget(ban_button)
+            content.add_widget(row)
+        popup = Popup(title=self._t("members"), content=content, size_hint=(0.94, 0.72))
+        popup.open()
+
+    def _moderate_member(self, member_id: str, ban: bool):
+        if self.group_host and self.group_host.kick(member_id, ban=ban):
+            self._append_log(f"[GROUP] {'Banned' if ban else 'Kicked'} {member_id[:8]}")
 
     def _stop_voice(self):
         if self.voice is not None:
@@ -866,32 +1189,54 @@ class CloakChatGUI(App):
         except ValueError as exc:
             self._append_log(f"[!] Invite trong danh bạ không hợp lệ: {exc}")
 
-    def _chat_ready(self, _dt):
-        self.connection_label.text = self._t("status_connected")
-        self.security_badge.text = f"●  E2EE\n[size=11]{self._t('secure')}[/size]"
+    def _group_key_ready(self):
+        Clock.schedule_once(lambda _dt: self._enable_group_b_client(), 0)
+
+    def _enable_group_b_client(self):
+        if self.group_mode != "B":
+            return
         self.message_input.disabled = False
         self.send_button.disabled = False
         self._enable_reactions(True)
-        self._enable_voice(True)
+        self.file_button.disabled = False
+        self.connection_label.text = self._t("status_connected")
+
+    def _chat_ready(self, _dt):
+        self.connection_label.text = self._t("status_connected")
+        self.security_badge.text = f"●  E2EE\n[size=11]{self._t('secure')}[/size]"
+        self.message_input.disabled = self.group_mode == "B"
+        self.send_button.disabled = self.group_mode == "B"
+        self._enable_reactions(self.group_mode != "B")
+        self._enable_voice(self.group_mode != "B")
+        if hasattr(self, "file_button"):
+            self.file_button.disabled = self.group_mode == "B"
         self._append_log("[+] Chat ready. AES-256-GCM encryption is active." if self.language == "en" else "[+] Chat đã bắt đầu. Tin nhắn được mã hóa AES-256-GCM.")
 
     def send_reaction(self, reaction: str):
-        if not self.session:
+        if not self.session and not self.group_host:
             return
         try:
-            self.session.send_reaction(reaction)
-            self._append_log(f"Bạn reaction: {reaction}")
+            if self.group_host:
+                self.group_host.send_reaction(reaction, message_id=self.last_peer_message_id)
+            else:
+                self.session.send_reaction(reaction, message_id=self.last_peer_message_id)
+            self._append_log(f"{self.nickname_input.text.strip() or 'Anonymous'} reaction: {reaction}")
         except (ConnectionError, OSError, RuntimeError, ValueError) as exc:
             self._append_log(f"[!] Không thể gửi reaction: {exc}")
 
     def send_message(self, *_args):
         message = self.message_input.text.strip()
-        if not message or not self.session:
+        if not message or (not self.session and not self.group_host):
             return
         try:
-            self.session.send_text(message)
-            self._append_log(f"Bạn: {message}")
+            if self.group_host:
+                self.group_host.send_message(message, reply_to=self.reply_to_id)
+            else:
+                self.session.send_text(message, reply_to=self.reply_to_id)
+            self._append_log(f"{self.nickname_input.text.strip() or 'Anonymous'}: {message}")
             self.message_input.text = ""
+            self.reply_to_id = None
+            self.message_input.hint_text = self._t("message_hint")
         except (ConnectionError, OSError, RuntimeError) as exc:
             self._append_log(f"[!] Không thể gửi: {exc}")
 
@@ -900,6 +1245,12 @@ class CloakChatGUI(App):
         self._stop_voice()
         if self.confirm_event:
             self.confirm_event.set()
+        if self.group_host:
+            try:
+                self.group_host.stop()
+            except Exception:
+                pass
+            self.group_host = None
         if self.session:
             try:
                 self.session.close()
@@ -931,6 +1282,11 @@ class CloakChatGUI(App):
             self.send_button.disabled = True
             self._enable_reactions(False)
             self._enable_voice(False)
+            self.file_button.disabled = True
+            self.members_button.disabled = True
+            self.reply_button.disabled = True
+            self.reply_to_id = None
+            self.last_peer_message_id = None
             self.connection_label.text = self._t("status_disconnected")
             self.security_badge.text = f"●  E2EE\n[size=11]{self._t('ready')}[/size]"
             self.qr_button.disabled = True

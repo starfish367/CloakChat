@@ -18,14 +18,19 @@ File `cloakchat_gui.py` cung cấp giao diện Kivy dùng chung cho Windows, Lin
 | Join LAN | Kết nối `IP:cổng` trực tiếp, không dùng SOCKS5/Tor |
 | E2EE | X25519, HKDF-SHA256 với `cloakchat_v1`, AES-256-GCM nonce 12 byte |
 | TCP protocol | Frame length 4 byte big-endian để chống dồn/trộn packet |
-| MitM verification | Safety Number 30 chữ số, chia thành 6 nhóm 5 chữ số |
+| MitM verification | SHA-512 fingerprint từ hai X25519 public key; phải đối chiếu ngoài băng |
+| Identity fingerprint | SHA-512 fingerprint của public key dùng làm member ID trong phiên group |
 | Runtime | Main thread nhập liệu, receiver thread nhận và giải mã |
 | QR invite | Payload có version/checksum; không chứa private key hoặc session key |
 | Bluetooth | Android Sharesheet cho phép chọn Bluetooth để gửi invite; desktop có fallback QR |
 | Copy/Share invite | Host có nút sao chép địa chỉ onion và chia sẻ invite; Android dùng Sharesheet, desktop dùng clipboard fallback |
 | Danh bạ | Lưu cục bộ tên + invite trong app data, không đồng bộ máy chủ |
-| Reactions | Emoji reaction được mã hóa bằng AES-GCM trên phiên E2EE |
+| Reactions | Emoji reaction được mã hóa bằng AES-GCM và gắn message ID |
+| Nickname/reply | Nickname được gửi qua profile E2EE; message envelope có ID/reply-to |
+| Group chat | Host chọn 2 người, Group A relay plaintext hoặc Group B relay ciphertext; Group B hiện giữ group key trong Host process và chưa phải server-untrusted E2EE hoàn chỉnh |
+| Group moderation | Host có thể kick/ban phiên member; Group B xoay group key sau khi loại member |
 | Voice chat | PCM16 frame ngắn được mã hóa AES-GCM; sounddevice trên desktop, AudioRecord/AudioTrack trên Android |
+| File transfer | File tối đa 25 MiB, chunk AES-GCM, SHA-256 toàn file và tên file được chuẩn hóa |
 | Public IP | TCP trực tiếp không Tor; cần port forwarding và firewall, IP sẽ lộ cho peer |
 | Vanity onion | Wrapper `tools/vanity_onion.py` gọi `mkp224o` để tạo prefix dễ nhớ |
 | Cleanup | `atexit`, SIGINT/SIGTERM, đóng socket, dừng Tor và xóa DataDirectory tạm |
@@ -89,7 +94,9 @@ Nếu bạn đã chạy sai các lệnh trước đó và thấy `.venv/bin/acti
 
 ## Cách sử dụng
 
-Menu có hai nhóm kết nối. Lựa chọn `1` và `2` dùng Tor cho Host/Join `.onion`. Lựa chọn `3` là `Host LAN`, lựa chọn `4` là `Join LAN`; hai lựa chọn LAN **không khởi động Tor và không dùng SOCKS5**.
+GUI có `Chế độ chat`: `2 người`, `Nhóm A — Host relay` và `Nhóm B — relay ciphertext`; Host chọn thêm `Cân bằng` hoặc `Nghiêm ngặt`. Group A cho phép Host relay đọc nội dung. Group B mã hóa event bằng group key và relay không giải mã trong luồng bình thường, nhưng bản hiện tại vẫn giữ group key trong Host process; vì vậy chưa nên xem đây là E2EE chống Host độc hại. Group B xoay group key sau kick/ban. Chế độ `Nghiêm ngặt` không cho chạy Group A.
+
+Menu CLI có hai nhóm kết nối. Lựa chọn `1` và `2` dùng Tor cho Host/Join `.onion`. Lựa chọn `3` là `Host LAN`, lựa chọn `4` là `Join LAN`; hai lựa chọn LAN **không khởi động Tor và không dùng SOCKS5**.
 
 ### Chế độ Tor
 
@@ -99,15 +106,15 @@ Chọn `Host` để tạo địa chỉ `.onion`, sau đó gửi địa chỉ nà
 
 Trên máy Host, chọn `3`. Chương trình sẽ hiện địa chỉ dạng `IP:cổng`, ví dụ `192.168.1.20:45678`. Gửi địa chỉ này cho peer, rồi trên máy peer chọn `4` và nhập đúng `IP:cổng`. Hai thiết bị phải cùng mạng nội bộ hoặc có đường định tuyến tới nhau; nếu Linux có firewall, cần cho phép cổng TCP được in trên màn hình.
 
-Chế độ LAN chỉ thay đổi **lớp truyền tải**. Sau khi socket kết nối, cả hai phía vẫn chạy X25519, HKDF-SHA256, AES-256-GCM, framing TCP và Safety Number như chế độ Tor. Hai người vẫn phải đối chiếu Safety Number qua một kênh tin cậy bên ngoài.
+Chế độ LAN chỉ thay đổi **lớp truyền tải**. Sau khi socket kết nối, cả hai phía vẫn chạy X25519, HKDF-SHA256, AES-256-GCM, framing TCP và SHA-512 fingerprint như chế độ Tor. Hai người vẫn phải đối chiếu fingerprint qua một kênh tin cậy bên ngoài.
 
-Sau handshake, cả hai phía sẽ hiển thị cùng một **Safety Number**. Hai người phải đối chiếu số này qua một kênh tin cậy bên ngoài và chỉ nhập `y` khi số trùng khớp. Nếu một phía nhập khác `y`, kết nối sẽ bị từ chối.
+Sau handshake, cả hai phía sẽ hiển thị cùng một **SHA-512 fingerprint**. Hai người phải đối chiếu toàn bộ fingerprint qua một kênh tin cậy bên ngoài và chỉ nhập `y` khi fingerprint trùng khớp. Nếu một phía nhập khác `y`, kết nối sẽ bị từ chối.
 
 ### Khi Join `.onion` bị timeout
 
 Host phải vẫn đang chạy với đúng địa chỉ ephemeral hiện tại. Nếu Host thoát rồi khởi động lại, địa chỉ `.onion` cũ không còn dùng được. Bản mới đợi Tor bootstrap hoàn tất trước khi Join và tăng thời gian tạo circuit lên 120 giây; nếu vẫn thất bại, thông báo sẽ phân biệt Tor chưa bootstrap, Host đã thoát hoặc onion address đã hết hiệu lực. Hai thiết bị không cần mở cổng Internet cho Tor, nhưng cả hai phải có kết nối Tor ổn định.
 
-Trong màn hình chat, nhập tin nhắn rồi nhấn Enter. Nhập `exit` để đóng phiên, dừng Tor và xóa dữ liệu tạm.
+Trong màn hình chat, nhập tin nhắn rồi nhấn Enter. Nút `REPLY` trả lời message gần nhất; reaction được gắn vào message ID. Nút `FILE` gửi file đã mã hóa theo chunk. Với Group A, Host mở `MEMBERS` để kick/ban phiên thành viên; với Group B, group key được xoay sau thao tác này. Nhập `exit` để đóng phiên, dừng Tor và xóa dữ liệu tạm.
 
 ### QR, Bluetooth và danh bạ
 
