@@ -15,11 +15,11 @@ orientation = portrait
 fullscreen = 0
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,RECORD_AUDIO,BLUETOOTH,BLUETOOTH_ADMIN,BLUETOOTH_CONNECT,BLUETOOTH_SCAN
 
+# Dùng local recipe để tránh mirror Savannah lỗi 502 trong CI.
+p4a.local_recipes = p4a-recipes
+
 [buildozer]
 log_level = 2
 warn_on_root = 1
 
 # Bản Android ưu tiên LAN. Tor mode cần binary Tor/Orbot tích hợp riêng.
-
-# Dùng local recipe để tránh mirror Savannah lỗi 502 trong CI.
-p4a.local_recipes = p4a-recipes
