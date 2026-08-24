@@ -24,6 +24,9 @@ File `cloakchat_gui.py` cung cấp giao diện Kivy dùng chung cho Windows, Lin
 | QR invite | Payload có version/checksum; không chứa private key hoặc session key |
 | Bluetooth | Android Sharesheet cho phép chọn Bluetooth để gửi invite; desktop có fallback QR |
 | Copy/Share invite | Host có nút sao chép địa chỉ onion và chia sẻ invite; Android dùng Sharesheet, desktop dùng clipboard fallback |
+| Paste invite | Nút Dán invite nạp payload từ clipboard, tự chọn transport và vai trò Join sau khi checksum hợp lệ |
+| Fingerprint nhanh | Có thể sao chép SHA-512 fingerprint sau handshake để đối chiếu ngoài băng; không thay thế xác nhận hai phía |
+| Xóa chat | Xóa log hiển thị trên thiết bị này sau hộp thoại xác nhận; không gửi lệnh xóa cho peer |
 | Danh bạ | Lưu cục bộ tên + invite trong app data, không đồng bộ máy chủ |
 | Reactions | Emoji reaction được mã hóa bằng AES-GCM và gắn message ID |
 | Nickname/reply | Nickname được gửi qua profile E2EE; message envelope có ID/reply-to |
@@ -114,7 +117,7 @@ Sau handshake, cả hai phía sẽ hiển thị cùng một **SHA-512 fingerprin
 
 Host phải vẫn đang chạy với đúng địa chỉ ephemeral hiện tại. Nếu Host thoát rồi khởi động lại, địa chỉ `.onion` cũ không còn dùng được. Bản mới đợi Tor bootstrap hoàn tất trước khi Join và tăng thời gian tạo circuit lên 120 giây; nếu vẫn thất bại, thông báo sẽ phân biệt Tor chưa bootstrap, Host đã thoát hoặc onion address đã hết hiệu lực. Hai thiết bị không cần mở cổng Internet cho Tor, nhưng cả hai phải có kết nối Tor ổn định.
 
-Trong màn hình chat, nhập tin nhắn rồi nhấn Enter. Nút `REPLY` trả lời message gần nhất; reaction được gắn vào message ID. Nút `FILE` gửi file đã mã hóa theo chunk. Với Group A, Host mở `MEMBERS` để kick/ban phiên thành viên; với Group B, group key được xoay sau thao tác này. Nhập `exit` để đóng phiên, dừng Tor và xóa dữ liệu tạm.
+Trong màn hình chat, nhập tin nhắn rồi nhấn Enter. Nút `REPLY` trả lời message gần nhất; reaction được gắn vào message ID. Nút `FILE` gửi file đã mã hóa theo chunk. Với Group A, Host mở `MEMBERS` để kick/ban phiên thành viên; với Group B, group key được xoay sau thao tác này. Nút `DÁN INVITE`/`PASTE INVITE` lấy invite từ clipboard và tự chọn transport khi payload hợp lệ. Nút `FINGERPRINT` sao chép fingerprint của phiên sau handshake để bạn gửi qua kênh xác thực khác. Nút `XÓA CHAT` chỉ xóa bản sao log trên thiết bị hiện tại; nó không xóa được bản sao của peer. Nhập `exit` để đóng phiên, dừng Tor và xóa dữ liệu tạm.
 
 ### QR, Bluetooth và danh bạ
 
@@ -135,8 +138,10 @@ Private key được tạo trong thư mục output và phải được bảo v�
 ## Kiểm tra cục bộ
 
 ```bash
-python -m py_compile CloakChat.py
+python -m py_compile CloakChat.py cloakchat_gui.py group_chat.py voice_chat.py invite_utils.py bluetooth_share.py
 python -m unittest discover -s tests -v
+KIVY_NO_ARGS=1 python tools/test_gui_i18n.py
+python tools/test_build_config.py
 ```
 
 ## Giao diện cửa sổ trên Linux/Windows
@@ -185,7 +190,7 @@ APK debug sẽ nằm trong `bin/`. Trên Android, chọn `LAN trực tiếp` đ�
 
 ## Build tự động bằng GitHub Actions
 
-Workflow `.github/workflows/build.yml` được chạy khi push vào `main`, khi push tag dạng `v*`, hoặc khi bấm **Run workflow** trong tab **Actions**. Workflow tạo ba artifact: `CloakChat-linux-x86_64`, `CloakChat-windows-x64` và `CloakChat-android-debug`. Khi chạy từ tag phiên bản, job cuối sẽ gom các artifact và tạo GitHub Release tự động.
+Workflow `.github/workflows/build.yml` được chạy khi push vào `main`, khi push tag dạng `v*`, hoặc khi bấm **Run workflow** trong tab **Actions**. Trước khi đóng gói, Linux/Windows/Android đều chạy kiểm tra cấu hình packaging; Linux còn chạy GUI smoke test. Workflow tạo ba artifact: `CloakChat-linux-x86_64`, `CloakChat-windows-x64` và `CloakChat-android-debug`. Khi chạy từ tag phiên bản, job cuối sẽ gom các artifact và tạo GitHub Release tự động.
 
 Để chạy build thủ công, vào repository trên GitHub, mở **Actions → Build CloakChat → Run workflow**. Để tạo Release mới sau khi workflow đã được thêm:
 

@@ -44,6 +44,12 @@ jobs:
 
       - name: Run protocol tests
         run: python -m unittest discover -s tests -v
+      - name: Check packaging configuration
+        run: python tools/test_build_config.py
+      - name: Run GUI smoke test
+        env:
+          KIVY_NO_ARGS: "1"
+        run: python tools/test_gui_i18n.py
       - name: Build Linux executable
         run: python -m PyInstaller --clean --noconfirm CloakChatGUI.spec
 
@@ -74,6 +80,8 @@ jobs:
 
       - name: Run protocol tests
         run: python -m unittest discover -s tests -v
+      - name: Check packaging configuration
+        run: python tools/test_build_config.py
       - name: Build Windows executable
         run: python -m PyInstaller --clean --noconfirm CloakChatGUI.spec
 
@@ -111,6 +119,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+
+      - name: Check packaging configuration
+        run: python tools/test_build_config.py
 
       - name: Install Buildozer
         run: |

@@ -116,7 +116,16 @@ class CloakChatGUI(App):
             "orbot_wait": "Đang chờ Orbot SOCKS5 sẵn sàng...",
             "copy": "SAO CHÉP",
             "share": "CHIA SẺ",
+            "paste": "DÁN INVITE",
+            "fingerprint": "FINGERPRINT",
+            "clear_chat": "XÓA CHAT",
+            "clear_chat_title": "Xóa lịch sử cục bộ",
+            "clear_chat_confirm": "Xóa bản sao chat trên thiết bị này? Peer vẫn giữ bản sao của họ.",
+            "cancel": "HỦY",
             "copied": "Đã sao chép địa chỉ vào clipboard.",
+            "fingerprint_copied": "Đã sao chép SHA-512 fingerprint để đối chiếu ngoài băng.",
+            "no_fingerprint": "Fingerprint chỉ xuất hiện sau khi handshake hoàn tất.",
+            "chat_cleared": "Đã xóa lịch sử chat cục bộ trên thiết bị này.",
             "shared": "Đã mở bảng chia sẻ.",
             "share_desktop": "Desktop chưa có Sharesheet; địa chỉ đã được sao chép để bạn dán vào ứng dụng khác.",
             "invite_label": "Gửi địa chỉ này cho peer:",
@@ -187,7 +196,16 @@ class CloakChatGUI(App):
             "orbot_wait": "Waiting for the Orbot SOCKS5 proxy...",
             "copy": "COPY",
             "share": "SHARE",
+            "paste": "PASTE INVITE",
+            "fingerprint": "FINGERPRINT",
+            "clear_chat": "CLEAR CHAT",
+            "clear_chat_title": "Clear local history",
+            "clear_chat_confirm": "Clear the chat copy on this device? Your peer keeps their own copy.",
+            "cancel": "CANCEL",
             "copied": "Address copied to the clipboard.",
+            "fingerprint_copied": "SHA-512 fingerprint copied for out-of-band verification.",
+            "no_fingerprint": "The fingerprint appears after the handshake completes.",
+            "chat_cleared": "Local chat history was cleared on this device.",
             "shared": "Share sheet opened.",
             "share_desktop": "Desktop has no system share sheet; the address was copied so you can paste it into another app.",
             "invite_label": "Send this address to your peer:",
@@ -269,7 +287,7 @@ class CloakChatGUI(App):
             size_hint_x=None if desktop_layout else 1,
             size_hint_y=1 if desktop_layout else None,
             width=dp(310) if desktop_layout else 1,
-            height=1 if desktop_layout else dp(315),
+            height=1 if desktop_layout else dp(520),
         )
         with sidebar.canvas.before:
             Color(0.045, 0.065, 0.105, 1)
@@ -446,7 +464,19 @@ class CloakChatGUI(App):
         self.auto_delete_spinner.bind(text=lambda *_: self._auto_delete_changed())
         settings_row.add_widget(self.auto_delete_spinner)
         sidebar.add_widget(settings_row)
-        root.add_widget(sidebar)
+        if desktop_layout:
+            root.add_widget(sidebar)
+        else:
+            # Android/màn hình hẹp: giữ chat luôn nhìn thấy và cho phần cấu hình
+            # cuộn độc lập thay vì đẩy composer ra khỏi màn hình.
+            sidebar_scroll = ScrollView(
+                size_hint_y=None,
+                height=dp(255),
+                do_scroll_x=False,
+                bar_width=dp(4),
+            )
+            sidebar_scroll.add_widget(sidebar)
+            root.add_widget(sidebar_scroll)
 
         content = BoxLayout(orientation="vertical", padding=[dp(14), dp(12)], spacing=dp(8), size_hint_x=1, size_hint_y=1)
         self.connection_label = Label(text=self._t("status_ready"), color=(0.58, 0.65, 0.78, 1), halign="left", valign="middle", size_hint_y=None, height=dp(28))
@@ -464,6 +494,19 @@ class CloakChatGUI(App):
         invite_row.add_widget(self.copy_address_button)
         invite_row.add_widget(self.share_address_button)
         content.add_widget(invite_row)
+
+        quick_actions = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(6))
+        quick_style = dict(background_normal="", background_color=(0.12, 0.18, 0.28, 1), font_size=dp(10))
+        self.paste_button = Button(text=self._t("paste"), **quick_style)
+        self.paste_button.bind(on_press=lambda *_: self.paste_invite())
+        self.fingerprint_button = Button(text=self._t("fingerprint"), disabled=True, **quick_style)
+        self.fingerprint_button.bind(on_press=lambda *_: self.copy_fingerprint())
+        self.clear_chat_button = Button(text=self._t("clear_chat"), **quick_style)
+        self.clear_chat_button.bind(on_press=lambda *_: self.confirm_clear_chat())
+        quick_actions.add_widget(self.paste_button)
+        quick_actions.add_widget(self.fingerprint_button)
+        quick_actions.add_widget(self.clear_chat_button)
+        content.add_widget(quick_actions)
 
         chat_panel = BoxLayout(orientation="vertical", padding=[dp(12), dp(10)], spacing=dp(6), size_hint_y=1)
         with chat_panel.canvas.before:
@@ -577,6 +620,9 @@ class CloakChatGUI(App):
         self.file_button.text = self._t("file")
         self.members_button.text = self._t("members")
         self.reply_button.text = self._t("reply")
+        self.paste_button.text = self._t("paste")
+        self.fingerprint_button.text = self._t("fingerprint")
+        self.clear_chat_button.text = self._t("clear_chat")
         self.auto_delete_label.text = self._t("auto_delete")
         self.auto_delete_spinner.values = (self._t("auto_off"), self._t("auto_30s"), self._t("auto_5m"))
         self.auto_delete_spinner.text = self._auto_delete_label()
@@ -660,7 +706,10 @@ class CloakChatGUI(App):
         self.stop_button.disabled = False
         self.transport.disabled = True
         self.role.disabled = True
-        self.address.disabled = self._role_key() == "HOST"
+        # Public Host cần giữ ô địa chỉ mở để worker đọc IP do người dùng nhập;
+        # Host LAN/Tor vẫn khóa vì địa chỉ được tạo tự động.
+        is_public_host = self._role_key() == "HOST" and self._transport_key() == "PUBLIC"
+        self.address.disabled = not (self._role_key() == "JOIN" or is_public_host)
         self.worker = threading.Thread(
             target=self._connection_worker,
             name="cloakchat-gui-worker",
@@ -941,6 +990,62 @@ class CloakChatGUI(App):
         else:
             Clipboard.copy(payload)
             self._append_log(f"[+] {self._t('share_desktop')}")
+
+    def paste_invite(self):
+        """Nạp invite hoặc địa chỉ từ clipboard, không đọc private/session key."""
+        try:
+            value = (Clipboard.paste() or "").strip()
+        except Exception as exc:
+            self._append_log(f"[!] Clipboard unavailable: {exc}")
+            return
+        if not value:
+            self._append_log("[!] Clipboard đang trống." if self.language == "vi" else "[!] Clipboard is empty.")
+            return
+        self.address.text = value
+        if value.startswith("CLOAKCHAT:"):
+            try:
+                parsed = parse_invite(value)
+                transport_key = {"tor": "TOR", "public": "PUBLIC", "lan": "LAN"}[parsed["transport"]]
+                self.transport.text = self._transport_value(transport_key)
+                self.role.text = self._role_value("JOIN")
+                self._append_log("[+] Đã nạp invite từ clipboard." if self.language == "vi" else "[+] Invite loaded from clipboard.")
+            except (KeyError, ValueError) as exc:
+                self._append_log(f"[!] Invite không hợp lệ: {exc}" if self.language == "vi" else f"[!] Invalid invite: {exc}")
+        else:
+            self._append_log("[+] Đã dán địa chỉ vào ô Join." if self.language == "vi" else "[+] Address pasted into the Join field.")
+
+    def copy_fingerprint(self):
+        """Sao chép fingerprint đã tính từ hai public key X25519 của phiên."""
+        if not self.session or not self.session.remote_public:
+            self._append_log(f"[!] {self._t('no_fingerprint')}")
+            return
+        fingerprint = core.sha512_fingerprint(self.session.local_public, self.session.remote_public)
+        try:
+            Clipboard.copy(fingerprint)
+            self._append_log(f"[+] {self._t('fingerprint_copied')}")
+        except Exception as exc:
+            self._append_log(f"[!] Clipboard unavailable: {exc}")
+
+    def confirm_clear_chat(self):
+        """Xóa log hiển thị cục bộ; không gửi lệnh xóa cho peer."""
+        content = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(10))
+        content.add_widget(Label(text=self._t("clear_chat_confirm"), halign="left", valign="middle"))
+        buttons = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        clear_button = Button(text=self._t("clear_chat"), background_normal="", background_color=(0.55, 0.18, 0.23, 1))
+        cancel_button = Button(text=self._t("cancel"))
+        buttons.add_widget(clear_button)
+        buttons.add_widget(cancel_button)
+        content.add_widget(buttons)
+        popup = Popup(title=self._t("clear_chat_title"), content=content, size_hint=(0.9, 0.36), auto_dismiss=False)
+        clear_button.bind(on_press=lambda *_: self._clear_local_chat(popup))
+        cancel_button.bind(on_press=lambda *_: popup.dismiss())
+        popup.open()
+
+    def _clear_local_chat(self, popup):
+        popup.dismiss()
+        self.log_entries.clear()
+        self._render_log()
+        self._append_log(f"[+] {self._t('chat_cleared')}", delete_after=8)
 
     def _confirm_safety_number(self, number: str) -> bool:
         """Hiển thị popup trên UI và chặn worker đến khi người dùng chọn."""
@@ -1228,6 +1333,7 @@ class CloakChatGUI(App):
         self.security_badge.text = f"●  E2EE\n[size=11]{self._t('secure')}[/size]"
         self.message_input.disabled = self.group_mode == "B"
         self.send_button.disabled = self.group_mode == "B"
+        self.fingerprint_button.disabled = False
         self._enable_reactions(self.group_mode != "B")
         self._enable_voice(self.group_mode != "B")
         if hasattr(self, "file_button"):
@@ -1307,6 +1413,7 @@ class CloakChatGUI(App):
             self.file_button.disabled = True
             self.members_button.disabled = True
             self.reply_button.disabled = True
+            self.fingerprint_button.disabled = True
             self.reply_to_id = None
             self.last_peer_message_id = None
             self.connection_label.text = self._t("status_disconnected")
