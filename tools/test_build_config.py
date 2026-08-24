@@ -12,14 +12,14 @@ buildozer = (ROOT / "buildozer.spec").read_text(encoding="utf-8")
 
 required_workflow_fragments = (
     "name: Linux GUI executable",
-    "name: Windows GUI executable",
     "name: Android APK",
     "name: CloakChat-linux-x86_64",
-    "name: CloakChat-windows-x64",
     "name: CloakChat-android-debug",
 )
 for fragment in required_workflow_fragments:
     assert fragment in workflow, f"missing workflow fragment: {fragment}"
+assert "  windows:" not in workflow
+assert "CloakChat-windows-x64" not in workflow
 
 assert "cloakchat_gui.py" in gui_spec
 assert "requirements = python3,kivy,cryptography" in buildozer

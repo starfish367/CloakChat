@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec cho CloakChat GUI trên Windows/Linux."""
+"""PyInstaller spec cho CloakChat GUI trên Linux."""
 from pathlib import Path
 
 from PyInstaller.utils.hooks import (

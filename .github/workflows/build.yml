@@ -60,37 +60,6 @@ jobs:
           path: dist/CloakChatGUI
           if-no-files-found: error
 
-  windows:
-    name: Windows GUI executable
-    runs-on: windows-2022
-    timeout-minutes: 45
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: requirements-gui.txt
-
-      - name: Install Python dependencies
-        run: python -m pip install -r requirements-gui.txt
-
-      - name: Run protocol tests
-        run: python -m unittest discover -s tests -v
-      - name: Check packaging configuration
-        run: python tools/test_build_config.py
-      - name: Build Windows executable
-        run: python -m PyInstaller --clean --noconfirm CloakChatGUI.spec
-
-      - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: CloakChat-windows-x64
-          path: dist/CloakChatGUI.exe
-          if-no-files-found: error
 
   android:
     name: Android APK
@@ -195,7 +164,7 @@ jobs:
   release:
     name: Create GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, windows, android]
+    needs: [linux, android]
     runs-on: ubuntu-24.04
     steps:
       - name: Download build artifacts

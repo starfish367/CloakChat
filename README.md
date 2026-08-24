@@ -1,12 +1,12 @@
 # CloakChat
 
-CloakChat là ứng dụng chat P2P ẩn danh hai người qua mạng Tor. Phiên bản hiện tại là CLI, sử dụng một file Python duy nhất và ưu tiên khả năng chạy trên **PC Linux** तथा **Android thông qua Termux**. Mã hóa đầu-cuối dùng X25519, HKDF-SHA256 và AES-256-GCM; địa chỉ Host là ephemeral onion service nên không được lưu cố định sau khi thoát.
+CloakChat là ứng dụng chat P2P ẩn danh hai người qua mạng Tor. Phiên bản hiện tại là CLI, sử dụng một file Python duy nhất và ưu tiên khả năng chạy trên **Linux** तथा **Android thông qua Termux**. Mã hóa đầu-cuối dùng X25519, HKDF-SHA256 và AES-256-GCM; địa chỉ Host là ephemeral onion service nên không được lưu cố định sau khi thoát.
 
-> **Tình trạng nền tảng:** `CloakChat.py` là bản CLI cho Linux/Android Termux. `cloakchat_gui.py` là bản giao diện Kivy cho Windows, Linux và Android. Chế độ LAN E2EE hoạt động trên cả ba nền tảng; APK Android hỗ trợ Join `.onion` qua Orbot SOCKS5 đang chạy, còn Host onion vẫn cần Tor daemon/control service phù hợp.
+> **Tình trạng nền tảng:** `CloakChat.py` là bản CLI cho Linux/Android Termux. `cloakchat_gui.py` là bản giao diện Kivy được duy trì cho Linux và Android. Chế độ LAN E2EE hoạt động trên hai nền tảng này; APK Android hỗ trợ Join `.onion` qua Orbot SOCKS5 đang chạy, còn Host onion vẫn cần Tor daemon/control service phù hợp. Bản Windows không còn nằm trong phạm vi build và kiểm thử chính thức.
 
 ## Tính năng chính
 
-File `cloakchat_gui.py` cung cấp giao diện Kivy dùng chung cho Windows, Linux và Android. Core mạng/mật mã vẫn nằm trong `CloakChat.py`, vì vậy GUI và CLI dùng chung X25519, Safety Number và AES-256-GCM. GUI có bộ chọn ngôn ngữ `Tiếng Việt`/`English`, khung chat lớn hơn, nút tạo QR invite, Copy/Share invite, chia sẻ qua Android Sharesheet/Bluetooth và danh bạ cục bộ.
+File `cloakchat_gui.py` cung cấp giao diện Kivy dùng chung cho Linux và Android. Core mạng/mật mã vẫn nằm trong `CloakChat.py`, vì vậy GUI và CLI dùng chung X25519, Safety Number và AES-256-GCM. GUI có bộ chọn ngôn ngữ `Tiếng Việt`/`English`, khung chat lớn hơn, nút tạo QR invite, Copy/Share invite, chia sẻ qua Android Sharesheet/Bluetooth và danh bạ cục bộ.
 
 | Thành phần | Triển khai |
 |---|---|
@@ -121,7 +121,7 @@ Trong màn hình chat, nhập tin nhắn rồi nhấn Enter. Nút `REPLY` trả 
 
 ### QR, Bluetooth và danh bạ
 
-Sau khi Host có địa chỉ, GUI hiển thị hàng `Gửi địa chỉ này cho peer` cùng nút `Sao chép` và `Chia sẻ`. `Sao chép` đưa địa chỉ onion/IP vào clipboard; `Chia sẻ` gửi invite đầy đủ qua Android Sharesheet, còn Linux/Windows sẽ sao chép invite để bạn dán vào ứng dụng khác. Nút `QR` tạo ảnh QR chứa invite có checksum. Invite chỉ chứa transport và địa chỉ kết nối, không chứa private key hoặc session key. Trên Android, nút `Bluetooth` cũng mở Android Sharesheet để người dùng chọn Bluetooth.
+Sau khi Host có địa chỉ, GUI hiển thị hàng `Gửi địa chỉ này cho peer` cùng nút `Sao chép` và `Chia sẻ`. `Sao chép` đưa địa chỉ onion/IP vào clipboard; `Chia sẻ` gửi invite đầy đủ qua Android Sharesheet, còn Linux sẽ sao chép invite để bạn dán vào ứng dụng khác. Nút `QR` tạo ảnh QR chứa invite có checksum. Invite chỉ chứa transport và địa chỉ kết nối, không chứa private key hoặc session key. Trên Android, nút `Bluetooth` cũng mở Android Sharesheet để người dùng chọn Bluetooth.
 
 Nút `Danh bạ` lưu tên và invite trong thư mục dữ liệu cục bộ của ứng dụng. Danh bạ không được đồng bộ lên máy chủ. Khi nạp một invite từ danh bạ, GUI tự chọn lại transport LAN/Tor.
 
@@ -144,7 +144,7 @@ KIVY_NO_ARGS=1 python tools/test_gui_i18n.py
 python tools/test_build_config.py
 ```
 
-## Giao diện cửa sổ trên Linux/Windows
+## Giao diện cửa sổ trên Linux
 
 Cài dependency GUI và chạy:
 
@@ -168,15 +168,6 @@ Tor cần được cài hệ thống nếu chọn `Tor / Onion`:
 sudo apt install tor
 ```
 
-Trên Windows, đặt `tor.exe` tại `tor_bin/tor.exe`, sau đó chạy PowerShell:
-
-```powershell
-py -m pip install -r requirements-gui.txt
-py -m PyInstaller --clean --noconfirm CloakChatGUI.spec
-```
-
-File tạo ra là `dist/CloakChatGUI.exe`. PyInstaller phải chạy trên đúng hệ điều hành và kiến trúc đích.
-
 ## Giao diện Android bằng Buildozer
 
 Build APK trên máy Linux:
@@ -190,7 +181,7 @@ APK debug sẽ nằm trong `bin/`. Trên Android, chọn `LAN trực tiếp` đ�
 
 ## Build tự động bằng GitHub Actions
 
-Workflow `.github/workflows/build.yml` được chạy khi push vào `main`, khi push tag dạng `v*`, hoặc khi bấm **Run workflow** trong tab **Actions**. Trước khi đóng gói, Linux/Windows/Android đều chạy kiểm tra cấu hình packaging; Linux còn chạy GUI smoke test. Workflow tạo ba artifact: `CloakChat-linux-x86_64`, `CloakChat-windows-x64` và `CloakChat-android-debug`. Khi chạy từ tag phiên bản, job cuối sẽ gom các artifact và tạo GitHub Release tự động.
+Workflow `.github/workflows/build.yml` được chạy khi push vào `main`, khi push tag dạng `v*`, hoặc khi bấm **Run workflow** trong tab **Actions**. Workflow hiện chỉ kiểm tra và đóng gói Linux/Android; Linux chạy thêm GUI smoke test. Hai artifact chính là `CloakChat-linux-x86_64` và `CloakChat-android-debug`. Khi chạy từ tag phiên bản, job cuối sẽ gom các artifact và tạo GitHub Release tự động. Windows không còn được build hoặc kiểm thử trong workflow.
 
 Để chạy build thủ công, vào repository trên GitHub, mở **Actions → Build CloakChat → Run workflow**. Để tạo Release mới sau khi workflow đã được thêm:
 
@@ -201,19 +192,11 @@ git push origin v1.2.0
 
 Binary Linux do runner GitHub tạo là `x86_64`. Armbian ARM cần build riêng trên chính Armbian hoặc dùng runner ARM tương ứng; không đổi tên binary x86_64 thành ARM được.
 
-## Đóng gói CLI Windows bằng PyInstaller
-
-Đặt `tor.exe` tại `tor_bin/tor.exe`, sau đó:
-
-```powershell
-pyinstaller --onefile --console --add-binary "tor_bin/tor.exe;tor_bin" CloakChat.py
-```
-
 ## Mô hình tin cậy và giới hạn
 
 Safety Number chỉ có tác dụng chống MitM khi được đối chiếu qua kênh ngoài băng có tính xác thực. Tor ẩn tuyến mạng nhưng không thay thế xác thực danh tính. Ứng dụng không lưu lịch sử chat, tuy nhiên hệ điều hành, terminal, crash dump hoặc công cụ bên ngoài vẫn có thể tạo dữ liệu riêng.
 
-Đây là phần mềm liên lạc bảo mật cần được kiểm thử và audit độc lập trước khi dùng cho dữ liệu nhạy cảm cao. Chế độ LAN không ẩn địa chỉ IP khỏi mạng nội bộ; nó chỉ tắt Tor, còn E2EE vẫn hoạt động. Không chạy `tor.exe` hoặc binary Tor không rõ nguồn gốc.
+Đây là phần mềm liên lạc bảo mật cần được kiểm thử và audit độc lập trước khi dùng cho dữ liệu nhạy cảm cao. Chế độ LAN không ẩn địa chỉ IP khỏi mạng nội bộ; nó chỉ tắt Tor, còn E2EE vẫn hoạt động. Không chạy binary Tor không rõ nguồn gốc.
 
 ## Giấy phép
 
