@@ -57,6 +57,23 @@ assert app._transport_key() == "LAN"
 assert app.paste_button.text == "DÁN INVITE"
 assert app.clear_chat_button.text == "XÓA CHAT"
 
+# Tìm kiếm chỉ lọc log tại chỗ và không thay đổi danh sách transcript gốc.
+app.log_entries.clear()
+app._append_log("Alice: hello secure world")
+app._append_log("Bob: unrelated message")
+app.search_input.text = "SECURE"
+app.apply_search()
+assert app.chat_log.text == "Alice: hello secure world\n"
+app.clear_search()
+assert "unrelated message" in app.chat_log.text
+
+# Xuất transcript local không bao gồm khóa hoặc dữ liệu session.
+app.export_chat()
+exports = sorted((Path(app.user_data_dir) / "exports").glob("cloakchat_*.txt"), key=lambda item: item.stat().st_mtime)
+assert exports
+assert "Alice: hello secure world" in exports[-1].read_text(encoding="utf-8")
+exports[-1].unlink()
+
 # Fingerprint chỉ được phép copy sau khi phiên có đủ hai public key.
 class FakeSession:
     local_public = b"a" * 32

@@ -126,6 +126,11 @@ class CloakChatGUI(App):
             "fingerprint_copied": "Đã sao chép SHA-512 fingerprint để đối chiếu ngoài băng.",
             "no_fingerprint": "Fingerprint chỉ xuất hiện sau khi handshake hoàn tất.",
             "chat_cleared": "Đã xóa lịch sử chat cục bộ trên thiết bị này.",
+            "search_hint": "Tìm trong chat...",
+            "search": "TÌM",
+            "clear_search": "XÓA TÌM",
+            "export": "XUẤT CHAT",
+            "export_saved": "Đã lưu transcript tại",
             "shared": "Đã mở bảng chia sẻ.",
             "share_desktop": "Desktop chưa có Sharesheet; địa chỉ đã được sao chép để bạn dán vào ứng dụng khác.",
             "invite_label": "Gửi địa chỉ này cho peer:",
@@ -206,6 +211,11 @@ class CloakChatGUI(App):
             "fingerprint_copied": "SHA-512 fingerprint copied for out-of-band verification.",
             "no_fingerprint": "The fingerprint appears after the handshake completes.",
             "chat_cleared": "Local chat history was cleared on this device.",
+            "search_hint": "Search chat...",
+            "search": "SEARCH",
+            "clear_search": "CLEAR SEARCH",
+            "export": "EXPORT CHAT",
+            "export_saved": "Transcript saved to",
             "shared": "Share sheet opened.",
             "share_desktop": "Desktop has no system share sheet; the address was copied so you can paste it into another app.",
             "invite_label": "Send this address to your peer:",
@@ -255,6 +265,7 @@ class CloakChatGUI(App):
         self.current_address: Optional[str] = None
         self.incoming_files = {}
         self.log_entries = []
+        self.search_query = ""
         self.auto_delete_seconds = 0
         self.group_host: Optional[GroupHost] = None
         self.group_mode = "DIRECT"
@@ -506,7 +517,30 @@ class CloakChatGUI(App):
         quick_actions.add_widget(self.paste_button)
         quick_actions.add_widget(self.fingerprint_button)
         quick_actions.add_widget(self.clear_chat_button)
+        self.export_button = Button(text=self._t("export"), **quick_style)
+        self.export_button.bind(on_press=lambda *_: self.export_chat())
+        quick_actions.add_widget(self.export_button)
         content.add_widget(quick_actions)
+
+        search_row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(6))
+        self.search_input = TextInput(
+            hint_text=self._t("search_hint"),
+            multiline=False,
+            padding=[dp(12), dp(9)],
+            background_normal="",
+            background_color=(0.11, 0.15, 0.23, 1),
+            foreground_color=(0.92, 0.95, 1, 1),
+            hint_text_color=(0.45, 0.53, 0.67, 1),
+        )
+        self.search_input.bind(on_text_validate=lambda *_: self.apply_search())
+        self.search_button = Button(text=self._t("search"), size_hint_x=None, width=dp(70), **quick_style)
+        self.search_button.bind(on_press=lambda *_: self.apply_search())
+        self.clear_search_button = Button(text=self._t("clear_search"), size_hint_x=None, width=dp(90), **quick_style)
+        self.clear_search_button.bind(on_press=lambda *_: self.clear_search())
+        search_row.add_widget(self.search_input)
+        search_row.add_widget(self.search_button)
+        search_row.add_widget(self.clear_search_button)
+        content.add_widget(search_row)
 
         chat_panel = BoxLayout(orientation="vertical", padding=[dp(12), dp(10)], spacing=dp(6), size_hint_y=1)
         with chat_panel.canvas.before:
@@ -623,6 +657,10 @@ class CloakChatGUI(App):
         self.paste_button.text = self._t("paste")
         self.fingerprint_button.text = self._t("fingerprint")
         self.clear_chat_button.text = self._t("clear_chat")
+        self.export_button.text = self._t("export")
+        self.search_input.hint_text = self._t("search_hint")
+        self.search_button.text = self._t("search")
+        self.clear_search_button.text = self._t("clear_search")
         self.auto_delete_label.text = self._t("auto_delete")
         self.auto_delete_spinner.values = (self._t("auto_off"), self._t("auto_30s"), self._t("auto_5m"))
         self.auto_delete_spinner.text = self._auto_delete_label()
@@ -676,8 +714,33 @@ class CloakChatGUI(App):
             self.auto_delete_seconds = 0
 
     def _render_log(self):
-        self.chat_log.text = "\n".join(entry["text"] for entry in self.log_entries) + ("\n" if self.log_entries else "")
+        query = self.search_query.casefold().strip()
+        entries = (
+            [entry for entry in self.log_entries if query in entry["text"].casefold()]
+            if query
+            else self.log_entries
+        )
+        self.chat_log.text = "\n".join(entry["text"] for entry in entries) + ("\n" if entries else "")
         self.chat_log.cursor = (0, len(self.chat_log.text))
+
+    def apply_search(self):
+        """Lọc log cục bộ; không gửi query hoặc nội dung chat qua mạng."""
+        self.search_query = self.search_input.text.strip()
+        self._render_log()
+
+    def clear_search(self):
+        self.search_query = ""
+        self.search_input.text = ""
+        self._render_log()
+
+    def export_chat(self):
+        """Xuất transcript local, không bao gồm private key, session key hay invite."""
+        export_dir = Path(self.user_data_dir) / "exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        filename = time.strftime("cloakchat_%Y%m%d_%H%M%S.txt")
+        target = export_dir / filename
+        target.write_text("\n".join(entry["text"] for entry in self.log_entries) + "\n", encoding="utf-8")
+        self._append_log(f"[+] {self._t('export_saved')}: {target}", delete_after=8)
 
     def _expire_log_entry(self, entry_id: str):
         self.log_entries[:] = [entry for entry in self.log_entries if entry["id"] != entry_id]
@@ -1415,6 +1478,8 @@ class CloakChatGUI(App):
             self.reply_button.disabled = True
             self.fingerprint_button.disabled = True
             self.reply_to_id = None
+            self.search_query = ""
+            self.search_input.text = ""
             self.last_peer_message_id = None
             self.connection_label.text = self._t("status_disconnected")
             self.security_badge.text = f"●  E2EE\n[size=11]{self._t('ready')}[/size]"
