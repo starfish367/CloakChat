@@ -38,8 +38,9 @@ assert app._security_key() == "BALANCED"
 assert app.paste_button.text == "PASTE INVITE"
 assert app.fingerprint_button.disabled is True
 assert app.clear_chat_button.text == "CLEAR CHAT"
+assert app.details_button.text == "DETAILS"
 
-# Kiểm tra nạp invite từ clipboard: chỉ nạp transport/address, không đụng key.
+# Tìm kiếm tra nạp invite từ clipboard: chỉ nạp transport/address, không đụng key.
 import cloakchat_gui
 cloakchat_gui.Clipboard = FakeClipboard
 FakeClipboard.value = create_invite("lan", "192.0.2.10:4567", "Test Host")
@@ -56,6 +57,13 @@ assert app.transport.text == "LAN trực tiếp"
 assert app._transport_key() == "LAN"
 assert app.paste_button.text == "DÁN INVITE"
 assert app.clear_chat_button.text == "XÓA CHAT"
+assert app.details_button.text == "CHI TIẾT"
+app.toggle_settings()
+assert app.connection_card.height == 0
+assert app.settings_toggle_button.text == "MỞ CẤU HÌNH"
+app.toggle_settings()
+assert app.connection_card.height > 0
+assert app.settings_toggle_button.text == "ẨN CẤU HÌNH"
 
 # Tìm kiếm chỉ lọc log tại chỗ và không thay đổi danh sách transcript gốc.
 app.log_entries.clear()

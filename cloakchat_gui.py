@@ -129,6 +129,16 @@ class CloakChatGUI(App):
             "search_hint": "Tìm trong chat...",
             "search": "TÌM",
             "clear_search": "XÓA TÌM",
+            "details": "CHI TIẾT",
+            "session_details_title": "Chi tiết phiên bảo mật",
+            "transport_detail": "Transport",
+            "role_detail": "Vai trò",
+            "group_detail": "Chế độ nhóm",
+            "security_detail": "Mức bảo mật",
+            "fingerprint_detail": "SHA-512 fingerprint",
+            "no_session_details": "Chưa có phiên đang hoạt động.",
+            "show_settings": "MỞ CẤU HÌNH",
+            "hide_settings": "ẨN CẤU HÌNH",
             "export": "XUẤT CHAT",
             "export_saved": "Đã lưu transcript tại",
             "shared": "Đã mở bảng chia sẻ.",
@@ -214,6 +224,16 @@ class CloakChatGUI(App):
             "search_hint": "Search chat...",
             "search": "SEARCH",
             "clear_search": "CLEAR SEARCH",
+            "details": "DETAILS",
+            "session_details_title": "Secure session details",
+            "transport_detail": "Transport",
+            "role_detail": "Role",
+            "group_detail": "Group mode",
+            "security_detail": "Security level",
+            "fingerprint_detail": "SHA-512 fingerprint",
+            "no_session_details": "No active session.",
+            "show_settings": "SHOW SETTINGS",
+            "hide_settings": "HIDE SETTINGS",
             "export": "EXPORT CHAT",
             "export_saved": "Transcript saved to",
             "shared": "Share sheet opened.",
@@ -266,6 +286,7 @@ class CloakChatGUI(App):
         self.incoming_files = {}
         self.log_entries = []
         self.search_query = ""
+        self.settings_expanded = True
         self.auto_delete_seconds = 0
         self.group_host: Optional[GroupHost] = None
         self.group_mode = "DIRECT"
@@ -298,7 +319,7 @@ class CloakChatGUI(App):
             size_hint_x=None if desktop_layout else 1,
             size_hint_y=1 if desktop_layout else None,
             width=dp(310) if desktop_layout else 1,
-            height=1 if desktop_layout else dp(520),
+            height=1 if desktop_layout else dp(600),
         )
         with sidebar.canvas.before:
             Color(0.045, 0.065, 0.105, 1)
@@ -326,6 +347,9 @@ class CloakChatGUI(App):
         )
         self.language_spinner.bind(text=lambda _spinner, value: self.set_language("en" if value == "English" else "vi"))
         header.add_widget(self.language_spinner)
+        self.details_button = Button(text=self._t("details"), size_hint_x=None, width=dp(78), background_normal="", background_color=(0.12, 0.18, 0.28, 1), font_size=dp(10), disabled=True)
+        self.details_button.bind(on_press=lambda *_: self.show_session_details())
+        header.add_widget(self.details_button)
         sidebar.add_widget(header)
 
         self.security_badge = Label(
@@ -339,6 +363,16 @@ class CloakChatGUI(App):
         )
         self.security_badge.bind(size=self._sync_text_size)
         sidebar.add_widget(self.security_badge)
+        self.settings_toggle_button = Button(
+            text=self._t("hide_settings"),
+            size_hint_y=None,
+            height=dp(32),
+            background_normal="",
+            background_color=(0.10, 0.15, 0.23, 1),
+            font_size=dp(10),
+        )
+        self.settings_toggle_button.bind(on_press=lambda *_: self.toggle_settings())
+        sidebar.add_widget(self.settings_toggle_button)
 
         connection_card = BoxLayout(
             orientation="vertical",
@@ -430,6 +464,7 @@ class CloakChatGUI(App):
             hint_text_color=(0.45, 0.53, 0.67, 1),
         )
         connection_card.add_widget(self.address)
+        self.connection_card = connection_card
         sidebar.add_widget(connection_card)
 
         action_row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
@@ -661,6 +696,8 @@ class CloakChatGUI(App):
         self.search_input.hint_text = self._t("search_hint")
         self.search_button.text = self._t("search")
         self.clear_search_button.text = self._t("clear_search")
+        self.details_button.text = self._t("details")
+        self.settings_toggle_button.text = self._t("hide_settings" if self.settings_expanded else "show_settings")
         self.auto_delete_label.text = self._t("auto_delete")
         self.auto_delete_spinner.values = (self._t("auto_off"), self._t("auto_30s"), self._t("auto_5m"))
         self.auto_delete_spinner.text = self._auto_delete_label()
@@ -682,6 +719,38 @@ class CloakChatGUI(App):
     @staticmethod
     def _sync_text_size(widget, _size):
         widget.text_size = (widget.width - dp(8), widget.height)
+
+    def toggle_settings(self):
+        """Thu gọn card cấu hình trên Android để ưu tiên vùng chat."""
+        self.settings_expanded = not self.settings_expanded
+        self.connection_card.opacity = 1 if self.settings_expanded else 0
+        self.connection_card.disabled = not self.settings_expanded
+        self.connection_card.height = dp(218) if self.settings_expanded else 0
+        self.settings_toggle_button.text = self._t("hide_settings" if self.settings_expanded else "show_settings")
+
+    def show_session_details(self):
+        if not self.session and not self.group_host:
+            self._append_log(f"[!] {self._t('no_session_details')}")
+            return
+        transport = self._transport_key()
+        role = self._role_key()
+        group = self._group_mode_key()
+        fingerprint = "—"
+        if self.session and self.session.remote_public:
+            fingerprint = core.sha512_fingerprint(self.session.local_public, self.session.remote_public)
+        content = BoxLayout(orientation="vertical", padding=dp(14), spacing=dp(9))
+        content.add_widget(Label(text=(
+            f"{self._t('transport_detail')}: {self._transport_value(transport)}\n"
+            f"{self._t('role_detail')}: {self._role_value(role)}\n"
+            f"{self._t('group_detail')}: {self._group_mode_value(group)}\n"
+            f"{self._t('security_detail')}: {self._security_value(self._security_key())}\n\n"
+            f"{self._t('fingerprint_detail')}:\n{fingerprint}"
+        ), halign="left", valign="middle"))
+        close_button = Button(text=self._t("cancel"), size_hint_y=None, height=dp(42))
+        content.add_widget(close_button)
+        popup = Popup(title=self._t("session_details_title"), content=content, size_hint=(0.94, 0.56), auto_dismiss=False)
+        close_button.bind(on_press=lambda *_: popup.dismiss())
+        popup.open()
 
     def _role_changed(self):
         """Host không cần nhập địa chỉ; Join mới dùng ô invite."""
@@ -870,6 +939,7 @@ class CloakChatGUI(App):
         self._status_from_worker(self._t("group_b_ready" if mode == "B" else "group_ready"))
 
     def _group_ready(self, _dt):
+        self.details_button.disabled = False
         self.connection_label.text = self._t("group_b_ready" if self.group_mode == "B" else "group_ready")
         self.message_input.disabled = False
         self.send_button.disabled = False
@@ -1392,6 +1462,7 @@ class CloakChatGUI(App):
         self.connection_label.text = self._t("status_connected")
 
     def _chat_ready(self, _dt):
+        self.details_button.disabled = False
         self.connection_label.text = self._t("status_connected")
         self.security_badge.text = f"●  E2EE\n[size=11]{self._t('secure')}[/size]"
         self.message_input.disabled = self.group_mode == "B"
@@ -1477,6 +1548,12 @@ class CloakChatGUI(App):
             self.members_button.disabled = True
             self.reply_button.disabled = True
             self.fingerprint_button.disabled = True
+            self.details_button.disabled = True
+            self.settings_expanded = True
+            self.connection_card.opacity = 1
+            self.connection_card.disabled = False
+            self.connection_card.height = dp(218)
+            self.settings_toggle_button.text = self._t("hide_settings")
             self.reply_to_id = None
             self.search_query = ""
             self.search_input.text = ""
