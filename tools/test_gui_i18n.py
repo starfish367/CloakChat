@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,16 @@ app = CloakChatGUI()
 root = app.build()
 assert app.language == "vi"
 assert app._transport_key() == "LAN"
+_original_orbot_port = os.environ.pop("CLOAKCHAT_ORBOT_SOCKS_PORT", None)
+try:
+    assert app._orbot_candidate_ports() == [9050, 9150]
+    os.environ["CLOAKCHAT_ORBOT_SOCKS_PORT"] = "9152"
+    assert app._orbot_candidate_ports() == [9152]
+finally:
+    if _original_orbot_port is None:
+        os.environ.pop("CLOAKCHAT_ORBOT_SOCKS_PORT", None)
+    else:
+        os.environ["CLOAKCHAT_ORBOT_SOCKS_PORT"] = _original_orbot_port
 app.set_language("en")
 assert app.transport.text == "Direct LAN"
 assert app.chat_title.text.startswith("[b]MESSAGES[/b]")

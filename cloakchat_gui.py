@@ -1079,16 +1079,24 @@ class CloakChatGUI(App):
         self._status_from_worker("[*] Đang kết nối IP nội bộ trực tiếp; Tor không được dùng...")
         return core.create_lan_socket(value)
 
+    def _orbot_candidate_ports(self):
+        """Trả về các cổng SOCKS5 cần thử; biến môi trường luôn được ưu tiên."""
+        configured = os.environ.get("CLOAKCHAT_ORBOT_SOCKS_PORT", "").strip()
+        if configured:
+            try:
+                port = int(configured)
+            except ValueError as exc:
+                raise ValueError("CLOAKCHAT_ORBOT_SOCKS_PORT must be a valid port." if self.language == "en" else "CLOAKCHAT_ORBOT_SOCKS_PORT phải là cổng hợp lệ.") from exc
+            if not 1 <= port <= 65535:
+                raise ValueError("Orbot SOCKS5 port must be between 1 and 65535." if self.language == "en" else "Cổng Orbot SOCKS5 phải nằm trong khoảng 1-65535.")
+            return [port]
+        return list(dict.fromkeys((core.ORBOT_SOCKS_PORT, 9150)))
+
     def _prepare_orbot(self) -> int:
         """Mở Orbot trên Android và chờ SOCKS5 listener sẵn sàng."""
         if platform != "android":
             raise RuntimeError(self._t("orbot_not_android"))
-        try:
-            socks_port = int(os.environ.get("CLOAKCHAT_ORBOT_SOCKS_PORT", str(core.ORBOT_SOCKS_PORT)))
-        except ValueError as exc:
-            raise ValueError("CLOAKCHAT_ORBOT_SOCKS_PORT must be a valid port." if self.language == "en" else "CLOAKCHAT_ORBOT_SOCKS_PORT phải là cổng hợp lệ.") from exc
-        if not 1 <= socks_port <= 65535:
-            raise ValueError("Orbot SOCKS5 port must be between 1 and 65535." if self.language == "en" else "Cổng Orbot SOCKS5 phải nằm trong khoảng 1-65535.")
+        candidate_ports = self._orbot_candidate_ports()
         try:
             from jnius import autoclass
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
@@ -1109,17 +1117,22 @@ class CloakChatGUI(App):
 
         self._status_from_worker(self._t("orbot_wait"))
         deadline = time.monotonic() + 45.0
+        last_errors = []
         while time.monotonic() < deadline and not self.stop_event.is_set():
-            try:
-                probe = socket.create_connection((core.SOCKS_HOST, socks_port), timeout=1.0)
-                probe.close()
-                return socks_port
-            except OSError:
-                time.sleep(1.0)
+            for socks_port in candidate_ports:
+                try:
+                    probe = socket.create_connection((core.SOCKS_HOST, socks_port), timeout=1.0)
+                    probe.close()
+                    return socks_port
+                except OSError as exc:
+                    last_errors.append(f"{socks_port}: {exc}")
+            time.sleep(1.0)
+        ports = ", ".join(str(port) for port in candidate_ports)
         raise TimeoutError(
-            "Orbot SOCKS5 did not become ready within 45 seconds."
+            f"Orbot SOCKS5 was not ready on ports {ports} within 45 seconds. "
+            "Open Orbot, wait until it is connected, or set CLOAKCHAT_ORBOT_SOCKS_PORT."
             if self.language == "en"
-            else "Orbot SOCKS5 chưa sẵn sàng sau 45 giây. Hãy mở Orbot và thử lại."
+            else f"Orbot SOCKS5 chưa sẵn sàng ở cổng {ports} sau 45 giây. Hãy mở Orbot, chờ trạng thái đã kết nối hoặc đặt CLOAKCHAT_ORBOT_SOCKS_PORT."
         )
 
     def _set_invite_address(self, address: str):

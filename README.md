@@ -183,7 +183,7 @@ sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool li
 bash android/build-apk.sh
 ```
 
-APK debug sẽ nằm trong `bin/`. Trên Android, chọn `LAN trực tiếp` để chat E2EE không cần Tor. Để Join `.onion` bằng Orbot, cài Orbot từ [F-Droid](https://f-droid.org/packages/org.torproject.android/) hoặc [Google Play](https://play.google.com/store/apps/details?id=org.torproject.android), mở Orbot và chờ proxy hoạt động, sau đó chọn `Orbot SOCKS5` trong CloakChat. Cổng mặc định là `127.0.0.1:9050`; nếu Orbot đang dùng cổng khác, đặt biến môi trường `CLOAKCHAT_ORBOT_SOCKS_PORT` tương ứng. Bản tích hợp hiện mở Orbot và hỗ trợ Join onion qua SOCKS5; không dùng binary Tor Linux/Windows trong APK.
+APK debug sẽ nằm trong `bin/`. Trên Android, chọn `LAN trực tiếp` để chat E2EE không cần Tor. Để Join `.onion` bằng Orbot, cài Orbot từ [F-Droid](https://f-droid.org/packages/org.torproject.android/) hoặc [Google Play](https://play.google.com/store/apps/details?id=org.torproject.android), mở Orbot và chờ proxy hoạt động, sau đó chọn `Orbot SOCKS5` trong CloakChat. CloakChat tự thử SOCKS5 tại `127.0.0.1:9050` rồi `127.0.0.1:9150`; nếu Orbot đang dùng cổng khác, đặt biến môi trường `CLOAKCHAT_ORBOT_SOCKS_PORT` tương ứng. Hãy mở Orbot, chờ trạng thái đã kết nối rồi mới bấm Bắt đầu trong CloakChat. Bản tích hợp hiện mở Orbot và hỗ trợ Join onion qua SOCKS5; không dùng binary Tor Linux/Windows trong APK.
 
 ## Build tự động bằng GitHub Actions
 
