@@ -46,6 +46,8 @@ cloakchat_gui.Clipboard = FakeClipboard
 FakeClipboard.value = create_invite("lan", "192.0.2.10:4567", "Test Host")
 app.paste_invite()
 assert app.address.text == FakeClipboard.value
+app.copy_invite()
+assert FakeClipboard.value == app.address.text
 assert app._transport_key() == "LAN"
 assert app._role_key() == "JOIN"
 
@@ -58,6 +60,7 @@ assert app._transport_key() == "LAN"
 assert app.paste_button.text == "DÁN INVITE"
 assert app.clear_chat_button.text == "XÓA CHAT"
 assert app.details_button.text == "CHI TIẾT"
+assert app.retry_button.text == "KẾT NỐI LẠI"
 app.toggle_settings()
 assert app.connection_card.height == 0
 assert app.settings_toggle_button.text == "MỞ CẤU HÌNH"
@@ -112,6 +115,10 @@ app.address.text = "203.0.113.10"
 app._role_changed()
 app.start_connection()
 assert app.address.disabled is False
+assert app.retry_button.disabled is True
+app.retry_button.disabled = False
+app.retry_connection()
+assert app.start_button.disabled is True
 
 class FakePopup:
     def dismiss(self):

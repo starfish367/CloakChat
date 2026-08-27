@@ -116,6 +116,8 @@ class CloakChatGUI(App):
             "orbot_wait": "Đang chờ Orbot SOCKS5 sẵn sàng...",
             "copy": "SAO CHÉP",
             "share": "CHIA SẺ",
+            "copy_invite": "COPY INVITE",
+            "retry": "KẾT NỐI LẠI",
             "paste": "DÁN INVITE",
             "fingerprint": "FINGERPRINT",
             "clear_chat": "XÓA CHAT",
@@ -211,6 +213,8 @@ class CloakChatGUI(App):
             "orbot_wait": "Waiting for the Orbot SOCKS5 proxy...",
             "copy": "COPY",
             "share": "SHARE",
+            "copy_invite": "COPY INVITE",
+            "retry": "RECONNECT",
             "paste": "PASTE INVITE",
             "fingerprint": "FINGERPRINT",
             "clear_chat": "CLEAR CHAT",
@@ -287,6 +291,7 @@ class CloakChatGUI(App):
         self.log_entries = []
         self.search_query = ""
         self.settings_expanded = True
+        self.has_attempted_connection = False
         self.auto_delete_seconds = 0
         self.group_host: Optional[GroupHost] = None
         self.group_mode = "DIRECT"
@@ -471,9 +476,12 @@ class CloakChatGUI(App):
         self.start_button = Button(text=self._t("start"), background_normal="", background_color=(0.15, 0.63, 0.48, 1), bold=True)
         self.start_button.bind(on_press=self.start_connection)
         self.stop_button = Button(text=self._t("stop"), background_normal="", background_color=(0.55, 0.18, 0.23, 1), disabled=True)
+        self.retry_button = Button(text=self._t("retry"), background_normal="", background_color=(0.12, 0.18, 0.28, 1), disabled=True, font_size=dp(10))
+        self.retry_button.bind(on_press=lambda *_: self.retry_connection())
         self.stop_button.bind(on_press=lambda *_: self.stop_connection())
         action_row.add_widget(self.start_button)
         action_row.add_widget(self.stop_button)
+        action_row.add_widget(self.retry_button)
         sidebar.add_widget(action_row)
 
         tools = GridLayout(cols=3, spacing=dp(5), size_hint_y=None, height=dp(78))
@@ -549,6 +557,9 @@ class CloakChatGUI(App):
         self.fingerprint_button.bind(on_press=lambda *_: self.copy_fingerprint())
         self.clear_chat_button = Button(text=self._t("clear_chat"), **quick_style)
         self.clear_chat_button.bind(on_press=lambda *_: self.confirm_clear_chat())
+        self.copy_invite_button = Button(text=self._t("copy_invite"), **quick_style)
+        self.copy_invite_button.bind(on_press=lambda *_: self.copy_invite())
+        quick_actions.add_widget(self.copy_invite_button)
         quick_actions.add_widget(self.paste_button)
         quick_actions.add_widget(self.fingerprint_button)
         quick_actions.add_widget(self.clear_chat_button)
@@ -691,6 +702,7 @@ class CloakChatGUI(App):
         self.reply_button.text = self._t("reply")
         self.paste_button.text = self._t("paste")
         self.fingerprint_button.text = self._t("fingerprint")
+        self.copy_invite_button.text = self._t("copy_invite")
         self.clear_chat_button.text = self._t("clear_chat")
         self.export_button.text = self._t("export")
         self.search_input.hint_text = self._t("search_hint")
@@ -830,12 +842,20 @@ class CloakChatGUI(App):
     def _set_connection_label(self, text: str):
         self.connection_label.text = text
 
+    def retry_connection(self):
+        """Thử lại cấu hình kết nối gần nhất mà không cần nhập lại trên Android."""
+        if self.worker and self.worker.is_alive():
+            return
+        self.start_connection()
+
     def start_connection(self, *_args):
         if self.worker and self.worker.is_alive():
             return
+        self.has_attempted_connection = True
         self.stop_event.clear()
         self.start_button.disabled = True
         self.stop_button.disabled = False
+        self.retry_button.disabled = True
         self.transport.disabled = True
         self.role.disabled = True
         # Public Host cần giữ ô địa chỉ mở để worker đọc IP do người dùng nhập;
@@ -1123,6 +1143,18 @@ class CloakChatGUI(App):
         else:
             Clipboard.copy(payload)
             self._append_log(f"[+] {self._t('share_desktop')}")
+
+    def copy_invite(self):
+        """Sao chép payload invite đầy đủ, gồm checksum nhưng không gồm khóa bí mật."""
+        payload = self.current_invite or self.current_address or self.address.text.strip()
+        if not payload:
+            self._append_log("[!] Chưa có invite để sao chép." if self.language == "vi" else "[!] No invite to copy.")
+            return
+        try:
+            Clipboard.copy(payload)
+            self._append_log(f"[+] {self._t('copied')}")
+        except Exception as exc:
+            self._append_log(f"[!] Clipboard unavailable: {exc}")
 
     def paste_invite(self):
         """Nạp invite hoặc địa chỉ từ clipboard, không đọc private/session key."""
@@ -1538,6 +1570,7 @@ class CloakChatGUI(App):
         def reset(_dt):
             self.start_button.disabled = False
             self.stop_button.disabled = True
+            self.retry_button.disabled = not self.has_attempted_connection
             self.transport.disabled = False
             self.role.disabled = False
             self.message_input.disabled = True

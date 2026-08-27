@@ -31,6 +31,8 @@ File `cloakchat_gui.py` cung cấp giao diện Kivy dùng chung cho Linux và An
 | Xuất transcript | Lưu bản ghi chat dạng UTF-8 trong thư mục `exports` của app data; không xuất private/session key |
 | Chi tiết phiên | Hiển thị transport, vai trò, group mode, mức bảo mật và fingerprint hiện tại trong một bảng riêng |
 | Thu gọn cấu hình | Ẩn/hiện card cấu hình trên Android để ưu tiên vùng chat mà không thay đổi session |
+| Copy Invite | Sao chép lại invite đầy đủ từ Host hoặc từ ô địa chỉ Join, không chứa khóa bí mật |
+| Kết nối lại | Thử lại cấu hình kết nối gần nhất bằng một chạm sau lỗi mạng, tránh phải nhập lại trên Android |
 | Danh bạ | Lưu cục bộ tên + invite trong app data, không đồng bộ máy chủ |
 | Reactions | Emoji reaction được mã hóa bằng AES-GCM và gắn message ID |
 | Nickname/reply | Nickname được gửi qua profile E2EE; message envelope có ID/reply-to |
@@ -121,7 +123,7 @@ Sau handshake, cả hai phía sẽ hiển thị cùng một **SHA-512 fingerprin
 
 Host phải vẫn đang chạy với đúng địa chỉ ephemeral hiện tại. Nếu Host thoát rồi khởi động lại, địa chỉ `.onion` cũ không còn dùng được. Bản mới đợi Tor bootstrap hoàn tất trước khi Join và tăng thời gian tạo circuit lên 120 giây; nếu vẫn thất bại, thông báo sẽ phân biệt Tor chưa bootstrap, Host đã thoát hoặc onion address đã hết hiệu lực. Hai thiết bị không cần mở cổng Internet cho Tor, nhưng cả hai phải có kết nối Tor ổn định.
 
-Trong màn hình chat, nhập tin nhắn rồi nhấn Enter. Ô `TÌM`/`SEARCH` lọc nhanh các dòng đang hiển thị; `XUẤT CHAT`/`EXPORT CHAT` lưu transcript UTF-8 cục bộ để sao lưu hoặc đọc lại. Nút `CHI TIẾT`/`DETAILS` hiển thị các tham số phiên và fingerprint đang dùng; nút `ẨN CẤU HÌNH`/`HIDE SETTINGS` thu gọn phần thiết lập trên màn hình hẹp. Nút `REPLY` trả lời message gần nhất; reaction được gắn vào message ID. Nút `FILE` gửi file đã mã hóa theo chunk. Với Group A, Host mở `MEMBERS` để kick/ban phiên thành viên; với Group B, group key được xoay sau thao tác này. Nút `DÁN INVITE`/`PASTE INVITE` lấy invite từ clipboard và tự chọn transport khi payload hợp lệ. Nút `FINGERPRINT` sao chép fingerprint của phiên sau handshake để bạn gửi qua kênh xác thực khác. Nút `XÓA CHAT` chỉ xóa bản sao log trên thiết bị hiện tại; nó không xóa được bản sao của peer. Nhập `exit` để đóng phiên, dừng Tor và xóa dữ liệu tạm.
+Trong màn hình chat, nhập tin nhắn rồi nhấn Enter. Ô `TÌM`/`SEARCH` lọc nhanh các dòng đang hiển thị; `XUẤT CHAT`/`EXPORT CHAT` lưu transcript UTF-8 cục bộ để sao lưu hoặc đọc lại. Nút `CHI TIẾT`/`DETAILS` hiển thị các tham số phiên và fingerprint đang dùng; nút `ẨN CẤU HÌNH`/`HIDE SETTINGS` thu gọn phần thiết lập trên màn hình hẹp. `COPY INVITE` sao chép lại invite từ Host hoặc ô địa chỉ Join; `KẾT NỐI LẠI`/`RECONNECT` thử lại cấu hình gần nhất sau lỗi mạng. Nút `REPLY` trả lời message gần nhất; reaction được gắn vào message ID. Nút `FILE` gửi file đã mã hóa theo chunk. Với Group A, Host mở `MEMBERS` để kick/ban phiên thành viên; với Group B, group key được xoay sau thao tác này. Nút `DÁN INVITE`/`PASTE INVITE` lấy invite từ clipboard và tự chọn transport khi payload hợp lệ. Nút `FINGERPRINT` sao chép fingerprint của phiên sau handshake để bạn gửi qua kênh xác thực khác. Nút `XÓA CHAT` chỉ xóa bản sao log trên thiết bị hiện tại; nó không xóa được bản sao của peer. Nhập `exit` để đóng phiên, dừng Tor và xóa dữ liệu tạm.
 
 ### QR, Bluetooth và danh bạ
 
