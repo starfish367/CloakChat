@@ -118,6 +118,10 @@ class CloakChatGUI(App):
             "share": "CHIA SẺ",
             "copy_invite": "COPY INVITE",
             "retry": "KẾT NỐI LẠI",
+            "check_orbot": "KIỂM TRA ORBOT",
+            "orbot_port": "Cổng Orbot (tự động)",
+            "orbot_checking": "Đang kiểm tra Orbot SOCKS5...",
+            "orbot_ready": "Orbot SOCKS5 hoạt động tại",
             "paste": "DÁN INVITE",
             "fingerprint": "FINGERPRINT",
             "clear_chat": "XÓA CHAT",
@@ -215,6 +219,10 @@ class CloakChatGUI(App):
             "share": "SHARE",
             "copy_invite": "COPY INVITE",
             "retry": "RECONNECT",
+            "check_orbot": "TEST ORBOT",
+            "orbot_port": "Orbot port (auto)",
+            "orbot_checking": "Checking Orbot SOCKS5...",
+            "orbot_ready": "Orbot SOCKS5 is ready at",
             "paste": "PASTE INVITE",
             "fingerprint": "FINGERPRINT",
             "clear_chat": "CLEAR CHAT",
@@ -384,7 +392,7 @@ class CloakChatGUI(App):
             padding=[dp(10), dp(9)],
             spacing=dp(5),
             size_hint_y=None,
-            height=dp(218),
+            height=dp(258),
         )
         with connection_card.canvas.before:
             Color(0.07, 0.10, 0.16, 1)
@@ -469,6 +477,19 @@ class CloakChatGUI(App):
             hint_text_color=(0.45, 0.53, 0.67, 1),
         )
         connection_card.add_widget(self.address)
+        self.orbot_port_input = TextInput(
+            hint_text=self._t("orbot_port"),
+            multiline=False,
+            input_filter="int",
+            size_hint_y=None,
+            height=dp(36),
+            padding=[dp(10), dp(8)],
+            background_normal="",
+            background_color=(0.11, 0.15, 0.23, 1),
+            foreground_color=(0.92, 0.95, 1, 1),
+            hint_text_color=(0.45, 0.53, 0.67, 1),
+        )
+        connection_card.add_widget(self.orbot_port_input)
         self.connection_card = connection_card
         sidebar.add_widget(connection_card)
 
@@ -484,7 +505,7 @@ class CloakChatGUI(App):
         action_row.add_widget(self.retry_button)
         sidebar.add_widget(action_row)
 
-        tools = GridLayout(cols=3, spacing=dp(5), size_hint_y=None, height=dp(78))
+        tools = GridLayout(cols=3, spacing=dp(5), size_hint_y=None, height=dp(104))
         button_style = dict(background_normal="", background_color=(0.12, 0.18, 0.28, 1), font_size=dp(11))
         self.qr_button = Button(text=self._t("qr"), disabled=True, **button_style)
         self.qr_button.bind(on_press=lambda *_: self.show_qr())
@@ -498,7 +519,9 @@ class CloakChatGUI(App):
         self.file_button.bind(on_press=lambda *_: self.choose_file())
         self.members_button = Button(text=self._t("members"), disabled=True, **button_style)
         self.members_button.bind(on_press=lambda *_: self.show_group_members())
-        for widget in (self.qr_button, self.bluetooth_button, self.contacts_button, self.voice_button, self.file_button, self.members_button):
+        self.orbot_check_button = Button(text=self._t("check_orbot"), **button_style)
+        self.orbot_check_button.bind(on_press=lambda *_: self.check_orbot())
+        for widget in (self.qr_button, self.bluetooth_button, self.contacts_button, self.voice_button, self.file_button, self.members_button, self.orbot_check_button):
             tools.add_widget(widget)
         sidebar.add_widget(tools)
 
@@ -710,6 +733,8 @@ class CloakChatGUI(App):
         self.clear_search_button.text = self._t("clear_search")
         self.details_button.text = self._t("details")
         self.settings_toggle_button.text = self._t("hide_settings" if self.settings_expanded else "show_settings")
+        self.orbot_port_input.hint_text = self._t("orbot_port")
+        self.orbot_check_button.text = self._t("check_orbot")
         self.auto_delete_label.text = self._t("auto_delete")
         self.auto_delete_spinner.values = (self._t("auto_off"), self._t("auto_30s"), self._t("auto_5m"))
         self.auto_delete_spinner.text = self._auto_delete_label()
@@ -1081,7 +1106,7 @@ class CloakChatGUI(App):
 
     def _orbot_candidate_ports(self):
         """Trả về các cổng SOCKS5 cần thử; biến môi trường luôn được ưu tiên."""
-        configured = os.environ.get("CLOAKCHAT_ORBOT_SOCKS_PORT", "").strip()
+        configured = self.orbot_port_input.text.strip() or os.environ.get("CLOAKCHAT_ORBOT_SOCKS_PORT", "").strip()
         if configured:
             try:
                 port = int(configured)
@@ -1091,6 +1116,20 @@ class CloakChatGUI(App):
                 raise ValueError("Orbot SOCKS5 port must be between 1 and 65535." if self.language == "en" else "Cổng Orbot SOCKS5 phải nằm trong khoảng 1-65535.")
             return [port]
         return list(dict.fromkeys((core.ORBOT_SOCKS_PORT, 9150)))
+
+    def check_orbot(self):
+        """Kiểm tra Orbot trên worker thread để giao diện Android không bị treo."""
+        if self.worker and self.worker.is_alive():
+            return
+        threading.Thread(target=self._check_orbot_worker, name="cloakchat-orbot-check", daemon=True).start()
+
+    def _check_orbot_worker(self):
+        try:
+            self._status_from_worker(self._t("orbot_checking"))
+            port = self._prepare_orbot()
+            self._status_from_worker(f"[+] {self._t('orbot_ready')}: 127.0.0.1:{port}")
+        except Exception as exc:
+            self._status_from_worker(f"[!] {exc}")
 
     def _prepare_orbot(self) -> int:
         """Mở Orbot trên Android và chờ SOCKS5 listener sẵn sàng."""
@@ -1598,7 +1637,7 @@ class CloakChatGUI(App):
             self.settings_expanded = True
             self.connection_card.opacity = 1
             self.connection_card.disabled = False
-            self.connection_card.height = dp(218)
+            self.connection_card.height = dp(258)
             self.settings_toggle_button.text = self._t("hide_settings")
             self.reply_to_id = None
             self.search_query = ""
