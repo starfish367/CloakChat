@@ -34,6 +34,8 @@ File `cloakchat_gui.py` cung cấp giao diện Kivy dùng chung cho Linux và An
 | Copy Invite | Sao chép lại invite đầy đủ từ Host hoặc từ ô địa chỉ Join, không chứa khóa bí mật |
 | Kết nối lại | Thử lại cấu hình kết nối gần nhất bằng một chạm sau lỗi mạng, tránh phải nhập lại trên Android |
 | Orbot port/check | Có thể nhập cổng SOCKS5 riêng và kiểm tra Orbot bằng worker nền trước khi Join |
+| Cỡ chữ Android | Nút A−/A/A+ điều chỉnh cỡ chữ chat cục bộ để dễ đọc trên màn hình nhỏ |
+| Chẩn đoán kết nối | Hiển thị thông tin kiểm tra Orbot và transport gần nhất trong popup cục bộ |
 | Danh bạ | Lưu cục bộ tên + invite trong app data, không đồng bộ máy chủ |
 | Reactions | Emoji reaction được mã hóa bằng AES-GCM và gắn message ID |
 | Nickname/reply | Nickname được gửi qua profile E2EE; message envelope có ID/reply-to |
@@ -184,7 +186,7 @@ sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool li
 bash android/build-apk.sh
 ```
 
-APK debug sẽ nằm trong `bin/`. Trên Android, chọn `LAN trực tiếp` để chat E2EE không cần Tor. Để Join `.onion` bằng Orbot, cài Orbot từ [F-Droid](https://f-droid.org/packages/org.torproject.android/) hoặc [Google Play](https://play.google.com/store/apps/details?id=org.torproject.android), mở Orbot và chờ proxy hoạt động, sau đó chọn `Orbot SOCKS5` trong CloakChat. CloakChat tự thử SOCKS5 tại `127.0.0.1:9050` rồi `127.0.0.1:9150`. Bạn cũng có thể nhập cổng riêng vào ô `Cổng Orbot`/`Orbot port`; ô này được ưu tiên hơn biến môi trường `CLOAKCHAT_ORBOT_SOCKS_PORT`. Nút `KIỂM TRA ORBOT`/`TEST ORBOT` chạy kiểm tra nền để xác nhận listener trước khi Join. Hãy mở Orbot, chờ trạng thái đã kết nối rồi mới bấm Bắt đầu trong CloakChat. Bản tích hợp hiện mở Orbot và hỗ trợ Join onion qua SOCKS5; không dùng binary Tor Linux/Windows trong APK.
+APK debug sẽ nằm trong `bin/`. Trên Android, chọn `LAN trực tiếp` để chat E2EE không cần Tor. Để Join `.onion` bằng Orbot, cài Orbot từ [F-Droid](https://f-droid.org/packages/org.torproject.android/) hoặc [Google Play](https://play.google.com/store/apps/details?id=org.torproject.android), mở Orbot và chờ proxy hoạt động, sau đó chọn `Orbot SOCKS5` trong CloakChat. CloakChat tự thử SOCKS5 tại `127.0.0.1:9050` rồi `127.0.0.1:9150`. Bạn cũng có thể nhập cổng riêng vào ô `Cổng Orbot`/`Orbot port`; ô này được ưu tiên hơn biến môi trường `CLOAKCHAT_ORBOT_SOCKS_PORT`. Nút `KIỂM TRA ORBOT`/`TEST ORBOT` chạy kiểm tra nền để xác nhận listener trước khi Join. Nút `CỠ CHỮ`/`TEXT SIZE` với A−/A/A+ điều chỉnh cỡ chữ cục bộ; `CHẨN ĐOÁN`/`DIAGNOSTICS` hiển thị kết quả kiểm tra gần nhất mà không gửi nội dung chat. Hãy mở Orbot, chờ trạng thái đã kết nối rồi mới bấm Bắt đầu trong CloakChat. Bản tích hợp hiện mở Orbot và hỗ trợ Join onion qua SOCKS5; không dùng binary Tor Linux/Windows trong APK.
 
 ## Build tự động bằng GitHub Actions
 

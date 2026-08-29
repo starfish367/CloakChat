@@ -52,6 +52,11 @@ assert app.clear_chat_button.text == "CLEAR CHAT"
 assert app.details_button.text == "DETAILS"
 assert app.orbot_check_button.text == "TEST ORBOT"
 assert app.orbot_port_input.hint_text == "Orbot port (auto)"
+assert app.diagnostics_button.text == "DIAGNOSTICS"
+app.set_font_scale(1.25)
+assert app.font_scale == 1.25
+assert app.chat_log.font_size > 16
+app.set_font_scale(1.0)
 
 # Tìm kiếm tra nạp invite từ clipboard: chỉ nạp transport/address, không đụng key.
 import cloakchat_gui
@@ -75,6 +80,7 @@ assert app.clear_chat_button.text == "XÓA CHAT"
 assert app.details_button.text == "CHI TIẾT"
 assert app.orbot_check_button.text == "KIỂM TRA ORBOT"
 assert app.orbot_port_input.hint_text == "Cổng Orbot (tự động)"
+assert app.diagnostics_button.text == "CHẨN ĐOÁN"
 app.toggle_settings()
 assert app.connection_card.height == 0
 assert app.settings_toggle_button.text == "MỞ CẤU HÌNH"

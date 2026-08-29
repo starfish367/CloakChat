@@ -122,6 +122,13 @@ class CloakChatGUI(App):
             "orbot_port": "Cổng Orbot (tự động)",
             "orbot_checking": "Đang kiểm tra Orbot SOCKS5...",
             "orbot_ready": "Orbot SOCKS5 hoạt động tại",
+            "font_size": "CỠ CHỮ",
+            "font_small": "NHỎ",
+            "font_default": "MẶC ĐỊNH",
+            "font_large": "LỚN",
+            "diagnostics": "CHẨN ĐOÁN",
+            "diagnostics_title": "Chẩn đoán kết nối",
+            "diagnostics_empty": "Chưa có thông tin chẩn đoán.",
             "paste": "DÁN INVITE",
             "fingerprint": "FINGERPRINT",
             "clear_chat": "XÓA CHAT",
@@ -223,6 +230,13 @@ class CloakChatGUI(App):
             "orbot_port": "Orbot port (auto)",
             "orbot_checking": "Checking Orbot SOCKS5...",
             "orbot_ready": "Orbot SOCKS5 is ready at",
+            "font_size": "TEXT SIZE",
+            "font_small": "SMALL",
+            "font_default": "DEFAULT",
+            "font_large": "LARGE",
+            "diagnostics": "DIAGNOSTICS",
+            "diagnostics_title": "Connection diagnostics",
+            "diagnostics_empty": "No diagnostic information yet.",
             "paste": "PASTE INVITE",
             "fingerprint": "FINGERPRINT",
             "clear_chat": "CLEAR CHAT",
@@ -300,6 +314,8 @@ class CloakChatGUI(App):
         self.search_query = ""
         self.settings_expanded = True
         self.has_attempted_connection = False
+        self.font_scale = 1.0
+        self.last_diagnostics = ""
         self.auto_delete_seconds = 0
         self.group_host: Optional[GroupHost] = None
         self.group_mode = "DIRECT"
@@ -332,7 +348,7 @@ class CloakChatGUI(App):
             size_hint_x=None if desktop_layout else 1,
             size_hint_y=1 if desktop_layout else None,
             width=dp(310) if desktop_layout else 1,
-            height=1 if desktop_layout else dp(600),
+            height=1 if desktop_layout else dp(660),
         )
         with sidebar.canvas.before:
             Color(0.045, 0.065, 0.105, 1)
@@ -521,7 +537,9 @@ class CloakChatGUI(App):
         self.members_button.bind(on_press=lambda *_: self.show_group_members())
         self.orbot_check_button = Button(text=self._t("check_orbot"), **button_style)
         self.orbot_check_button.bind(on_press=lambda *_: self.check_orbot())
-        for widget in (self.qr_button, self.bluetooth_button, self.contacts_button, self.voice_button, self.file_button, self.members_button, self.orbot_check_button):
+        self.diagnostics_button = Button(text=self._t("diagnostics"), **button_style)
+        self.diagnostics_button.bind(on_press=lambda *_: self.show_diagnostics())
+        for widget in (self.qr_button, self.bluetooth_button, self.contacts_button, self.voice_button, self.file_button, self.members_button, self.orbot_check_button, self.diagnostics_button):
             tools.add_widget(widget)
         sidebar.add_widget(tools)
 
@@ -540,7 +558,19 @@ class CloakChatGUI(App):
         )
         self.auto_delete_spinner.bind(text=lambda *_: self._auto_delete_changed())
         settings_row.add_widget(self.auto_delete_spinner)
-        sidebar.add_widget(settings_row)
+        self.font_size_label = Label(text=self._t("font_size"), color=(0.58, 0.65, 0.78, 1), size_hint_x=None, width=dp(66), font_size=dp(10))
+        self.font_minus_button = Button(text="A−", size_hint_x=None, width=dp(38), background_normal="", background_color=(0.12, 0.18, 0.28, 1), font_size=dp(10))
+        self.font_reset_button = Button(text="A", size_hint_x=None, width=dp(38), background_normal="", background_color=(0.12, 0.18, 0.28, 1), font_size=dp(10))
+        self.font_plus_button = Button(text="A+", size_hint_x=None, width=dp(38), background_normal="", background_color=(0.12, 0.18, 0.28, 1), font_size=dp(10))
+        self.font_minus_button.bind(on_press=lambda *_: self.set_font_scale(self.font_scale - 0.1))
+        self.font_reset_button.bind(on_press=lambda *_: self.set_font_scale(1.0))
+        self.font_plus_button.bind(on_press=lambda *_: self.set_font_scale(self.font_scale + 0.1))
+        font_row = BoxLayout(size_hint_y=None, height=dp(32), spacing=dp(4))
+        font_row.add_widget(self.font_size_label)
+        font_row.add_widget(self.font_minus_button)
+        font_row.add_widget(self.font_reset_button)
+        font_row.add_widget(self.font_plus_button)
+        sidebar.add_widget(font_row)
         if desktop_layout:
             root.add_widget(sidebar)
         else:
@@ -735,6 +765,8 @@ class CloakChatGUI(App):
         self.settings_toggle_button.text = self._t("hide_settings" if self.settings_expanded else "show_settings")
         self.orbot_port_input.hint_text = self._t("orbot_port")
         self.orbot_check_button.text = self._t("check_orbot")
+        self.diagnostics_button.text = self._t("diagnostics")
+        self.font_size_label.text = self._t("font_size")
         self.auto_delete_label.text = self._t("auto_delete")
         self.auto_delete_spinner.values = (self._t("auto_off"), self._t("auto_30s"), self._t("auto_5m"))
         self.auto_delete_spinner.text = self._auto_delete_label()
@@ -1104,6 +1136,26 @@ class CloakChatGUI(App):
         self._status_from_worker("[*] Đang kết nối IP nội bộ trực tiếp; Tor không được dùng...")
         return core.create_lan_socket(value)
 
+    def set_font_scale(self, scale: float):
+        """Điều chỉnh cỡ chữ cục bộ, hữu ích trên màn hình Android nhỏ."""
+        self.font_scale = max(0.85, min(1.25, round(scale, 2)))
+        base = dp(16) * self.font_scale
+        self.chat_log.font_size = base
+        self.message_input.font_size = base
+        self.search_input.font_size = dp(14) * self.font_scale
+        self.nickname_input.font_size = dp(14) * self.font_scale
+        self.address.font_size = dp(14) * self.font_scale
+
+    def show_diagnostics(self):
+        details = self.last_diagnostics or self._t("diagnostics_empty")
+        content = BoxLayout(orientation="vertical", padding=dp(14), spacing=dp(9))
+        content.add_widget(Label(text=details, halign="left", valign="top"))
+        close_button = Button(text=self._t("cancel"), size_hint_y=None, height=dp(42))
+        content.add_widget(close_button)
+        popup = Popup(title=self._t("diagnostics_title"), content=content, size_hint=(0.94, 0.62), auto_dismiss=False)
+        close_button.bind(on_press=lambda *_: popup.dismiss())
+        popup.open()
+
     def _orbot_candidate_ports(self):
         """Trả về các cổng SOCKS5 cần thử; biến môi trường luôn được ưu tiên."""
         configured = self.orbot_port_input.text.strip() or os.environ.get("CLOAKCHAT_ORBOT_SOCKS_PORT", "").strip()
@@ -1162,11 +1214,17 @@ class CloakChatGUI(App):
                 try:
                     probe = socket.create_connection((core.SOCKS_HOST, socks_port), timeout=1.0)
                     probe.close()
+                    self.last_diagnostics = f"Orbot SOCKS5: 127.0.0.1:{socks_port}\nPorts tried: {', '.join(str(port) for port in candidate_ports)}"
                     return socks_port
                 except OSError as exc:
                     last_errors.append(f"{socks_port}: {exc}")
             time.sleep(1.0)
         ports = ", ".join(str(port) for port in candidate_ports)
+        self.last_diagnostics = (
+            f"Ports tried: {ports}\n"
+            f"Errors: {'; '.join(last_errors[-6:])}\n"
+            "Next steps: open Orbot, wait for Connected, verify the port, and use a fresh onion address."
+        )
         raise TimeoutError(
             f"Orbot SOCKS5 was not ready on ports {ports} within 45 seconds. "
             "Open Orbot, wait until it is connected, or set CLOAKCHAT_ORBOT_SOCKS_PORT."
