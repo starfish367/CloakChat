@@ -129,6 +129,10 @@ class CloakChatGUI(App):
             "diagnostics": "CHẨN ĐOÁN",
             "diagnostics_title": "Chẩn đoán kết nối",
             "diagnostics_empty": "Chưa có thông tin chẩn đoán.",
+            "copy_diagnostics": "COPY CHẨN ĐOÁN",
+            "diagnostics_copied": "Đã sao chép thông tin chẩn đoán.",
+            "help": "HƯỚNG DẪN",
+            "help_title": "Hướng dẫn kết nối Android",
             "paste": "DÁN INVITE",
             "fingerprint": "FINGERPRINT",
             "clear_chat": "XÓA CHAT",
@@ -237,6 +241,10 @@ class CloakChatGUI(App):
             "diagnostics": "DIAGNOSTICS",
             "diagnostics_title": "Connection diagnostics",
             "diagnostics_empty": "No diagnostic information yet.",
+            "copy_diagnostics": "COPY DIAGNOSTICS",
+            "diagnostics_copied": "Diagnostic information copied.",
+            "help": "HELP",
+            "help_title": "Android connection guide",
             "paste": "PASTE INVITE",
             "fingerprint": "FINGERPRINT",
             "clear_chat": "CLEAR CHAT",
@@ -348,7 +356,7 @@ class CloakChatGUI(App):
             size_hint_x=None if desktop_layout else 1,
             size_hint_y=1 if desktop_layout else None,
             width=dp(310) if desktop_layout else 1,
-            height=1 if desktop_layout else dp(660),
+            height=1 if desktop_layout else dp(700),
         )
         with sidebar.canvas.before:
             Color(0.045, 0.065, 0.105, 1)
@@ -521,7 +529,7 @@ class CloakChatGUI(App):
         action_row.add_widget(self.retry_button)
         sidebar.add_widget(action_row)
 
-        tools = GridLayout(cols=3, spacing=dp(5), size_hint_y=None, height=dp(104))
+        tools = GridLayout(cols=3, spacing=dp(5), size_hint_y=None, height=dp(130))
         button_style = dict(background_normal="", background_color=(0.12, 0.18, 0.28, 1), font_size=dp(11))
         self.qr_button = Button(text=self._t("qr"), disabled=True, **button_style)
         self.qr_button.bind(on_press=lambda *_: self.show_qr())
@@ -539,7 +547,11 @@ class CloakChatGUI(App):
         self.orbot_check_button.bind(on_press=lambda *_: self.check_orbot())
         self.diagnostics_button = Button(text=self._t("diagnostics"), **button_style)
         self.diagnostics_button.bind(on_press=lambda *_: self.show_diagnostics())
-        for widget in (self.qr_button, self.bluetooth_button, self.contacts_button, self.voice_button, self.file_button, self.members_button, self.orbot_check_button, self.diagnostics_button):
+        self.copy_diagnostics_button = Button(text=self._t("copy_diagnostics"), **button_style)
+        self.copy_diagnostics_button.bind(on_press=lambda *_: self.copy_diagnostics())
+        self.help_button = Button(text=self._t("help"), **button_style)
+        self.help_button.bind(on_press=lambda *_: self.show_connection_help())
+        for widget in (self.qr_button, self.bluetooth_button, self.contacts_button, self.voice_button, self.file_button, self.members_button, self.orbot_check_button, self.diagnostics_button, self.copy_diagnostics_button, self.help_button):
             tools.add_widget(widget)
         sidebar.add_widget(tools)
 
@@ -766,6 +778,8 @@ class CloakChatGUI(App):
         self.orbot_port_input.hint_text = self._t("orbot_port")
         self.orbot_check_button.text = self._t("check_orbot")
         self.diagnostics_button.text = self._t("diagnostics")
+        self.copy_diagnostics_button.text = self._t("copy_diagnostics")
+        self.help_button.text = self._t("help")
         self.font_size_label.text = self._t("font_size")
         self.auto_delete_label.text = self._t("auto_delete")
         self.auto_delete_spinner.values = (self._t("auto_off"), self._t("auto_30s"), self._t("auto_5m"))
@@ -1145,6 +1159,42 @@ class CloakChatGUI(App):
         self.search_input.font_size = dp(14) * self.font_scale
         self.nickname_input.font_size = dp(14) * self.font_scale
         self.address.font_size = dp(14) * self.font_scale
+
+    def copy_diagnostics(self):
+        """Sao chép chẩn đoán kết nối; không đưa transcript chat vào clipboard."""
+        details = self.last_diagnostics or self._t("diagnostics_empty")
+        try:
+            Clipboard.copy(details)
+            self._append_log(f"[+] {self._t('diagnostics_copied')}")
+        except Exception as exc:
+            self._append_log(f"[!] Clipboard unavailable: {exc}")
+
+    def show_connection_help(self):
+        if self.language == "vi":
+            guide = (
+                "1. Mở Orbot và chờ Connected.\n"
+                "2. Chọn Orbot SOCKS5 trong CloakChat.\n"
+                "3. Để trống cổng để tự thử 9050/9150, hoặc nhập cổng Orbot.\n"
+                "4. Nhấn KIỂM TRA ORBOT trước khi Join.\n"
+                "5. Dùng onion mới khi Host vẫn đang chờ peer.\n\n"
+                "Tor/Orbot chỉ là transport; fingerprint SHA-512 vẫn cần đối chiếu ngoài băng."
+            )
+        else:
+            guide = (
+                "1. Open Orbot and wait for Connected.\n"
+                "2. Select Orbot SOCKS5 in CloakChat.\n"
+                "3. Leave the port empty to try 9050/9150, or enter Orbot's port.\n"
+                "4. Press TEST ORBOT before Join.\n"
+                "5. Use a fresh onion while the Host is waiting for a peer.\n\n"
+                "Tor/Orbot is only transport; the SHA-512 fingerprint still needs out-of-band verification."
+            )
+        content = BoxLayout(orientation="vertical", padding=dp(14), spacing=dp(9))
+        content.add_widget(Label(text=guide, halign="left", valign="top"))
+        close_button = Button(text=self._t("cancel"), size_hint_y=None, height=dp(42))
+        content.add_widget(close_button)
+        popup = Popup(title=self._t("help_title"), content=content, size_hint=(0.94, 0.66), auto_dismiss=False)
+        close_button.bind(on_press=lambda *_: popup.dismiss())
+        popup.open()
 
     def show_diagnostics(self):
         details = self.last_diagnostics or self._t("diagnostics_empty")

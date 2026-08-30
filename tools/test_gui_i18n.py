@@ -52,15 +52,19 @@ assert app.clear_chat_button.text == "CLEAR CHAT"
 assert app.details_button.text == "DETAILS"
 assert app.orbot_check_button.text == "TEST ORBOT"
 assert app.orbot_port_input.hint_text == "Orbot port (auto)"
-assert app.diagnostics_button.text == "DIAGNOSTICS"
+assert app.copy_diagnostics_button.text == "COPY DIAGNOSTICS"
+assert app.help_button.text == "HELP"
+import cloakchat_gui
+cloakchat_gui.Clipboard = FakeClipboard
+app.last_diagnostics = "Ports tried: 9050, 9150"
+app.copy_diagnostics()
+assert FakeClipboard.value == app.last_diagnostics
 app.set_font_scale(1.25)
 assert app.font_scale == 1.25
 assert app.chat_log.font_size > 16
 app.set_font_scale(1.0)
 
 # Tìm kiếm tra nạp invite từ clipboard: chỉ nạp transport/address, không đụng key.
-import cloakchat_gui
-cloakchat_gui.Clipboard = FakeClipboard
 FakeClipboard.value = create_invite("lan", "192.0.2.10:4567", "Test Host")
 app.paste_invite()
 assert app.address.text == FakeClipboard.value
@@ -80,7 +84,8 @@ assert app.clear_chat_button.text == "XÓA CHAT"
 assert app.details_button.text == "CHI TIẾT"
 assert app.orbot_check_button.text == "KIỂM TRA ORBOT"
 assert app.orbot_port_input.hint_text == "Cổng Orbot (tự động)"
-assert app.diagnostics_button.text == "CHẨN ĐOÁN"
+assert app.copy_diagnostics_button.text == "COPY CHẨN ĐOÁN"
+assert app.help_button.text == "HƯỚNG DẪN"
 app.toggle_settings()
 assert app.connection_card.height == 0
 assert app.settings_toggle_button.text == "MỞ CẤU HÌNH"
