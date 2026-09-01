@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import atexit
 import hashlib
+import json
 import os
 import secrets
 import socket
@@ -330,9 +331,19 @@ class CloakChatGUI(App):
         self.security_level = "BALANCED"
         self.last_peer_message_id: Optional[str] = None
         self.reply_to_id: Optional[str] = None
+        self.preferences_path: Optional[Path] = None
+        self.preferences = {}
+        self.keep_awake = False
 
     def build(self):
         self.title = "CloakChat"
+        self.preferences_path = Path(self.user_data_dir) / "preferences.json"
+        self.preferences = self._load_preferences()
+        self.language = self.preferences.get("language", self.language) if self.preferences.get("language", self.language) in self.TEXTS else self.language
+        try:
+            self.font_scale = max(0.85, min(1.25, float(self.preferences.get("font_scale", 1.0))))
+        except (TypeError, ValueError):
+            self.font_scale = 1.0
         self.contacts = ContactStore(self.user_data_dir)
         try:
             from kivy.core.window import Window
@@ -374,7 +385,7 @@ class CloakChatGUI(App):
         self.title_label.bind(size=self._sync_text_size)
         header.add_widget(self.title_label)
         self.language_spinner = Spinner(
-            text="Tiếng Việt",
+            text="English" if self.language == "en" else "Tiếng Việt",
             values=("Tiếng Việt", "English"),
             size_hint_x=None,
             width=dp(98),
@@ -478,7 +489,7 @@ class CloakChatGUI(App):
         connection_card.add_widget(fields)
         self.nickname_input = TextInput(
             hint_text=self._t("nickname"),
-            text="Anonymous",
+            text=str(self.preferences.get("nickname", "Anonymous"))[:64] or "Anonymous",
             multiline=False,
             size_hint_y=None,
             height=dp(36),
@@ -503,6 +514,7 @@ class CloakChatGUI(App):
         connection_card.add_widget(self.address)
         self.orbot_port_input = TextInput(
             hint_text=self._t("orbot_port"),
+            text=str(self.preferences.get("orbot_port", ""))[:5],
             multiline=False,
             input_filter="int",
             size_hint_y=None,
@@ -692,8 +704,47 @@ class CloakChatGUI(App):
         root.add_widget(content)
 
         self._append_log(self._t("log_ready"))
+        self.set_font_scale(self.font_scale)
         atexit.register(self.stop_connection)
         return root
+
+    def _load_preferences(self):
+        if not self.preferences_path or not self.preferences_path.is_file():
+            return {}
+        try:
+            data = json.loads(self.preferences_path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError, TypeError):
+            return {}
+
+    def _save_preferences(self):
+        if not self.preferences_path:
+            return
+        data = {
+            "language": self.language,
+            "font_scale": self.font_scale,
+        }
+        if hasattr(self, "nickname_input"):
+            data["nickname"] = self.nickname_input.text.strip()[:64]
+        if hasattr(self, "orbot_port_input"):
+            data["orbot_port"] = self.orbot_port_input.text.strip()[:5]
+        self.preferences = data
+        try:
+            self.preferences_path.parent.mkdir(parents=True, exist_ok=True)
+            self.preferences_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _set_keep_awake(self, enabled: bool):
+        """Giữ màn hình sáng khi đang chat trên Android; luôn khôi phục khi dừng."""
+        if platform != "android":
+            return
+        try:
+            from kivy.core.window import Window
+            Window.allow_screensaver = not enabled
+            self.keep_awake = enabled
+        except Exception:
+            self.keep_awake = False
 
     def _t(self, key: str) -> str:
         return self.TEXTS[self.language][key]
@@ -741,6 +792,7 @@ class CloakChatGUI(App):
         group_key = self._group_mode_key()
         security_key = self._security_key()
         self.language = language
+        self._save_preferences()
         self.transport.values = tuple(self._transport_value(key) for key in ("LAN", "PUBLIC", "TOR", "ORBOT"))
         self.transport.text = self._transport_value(transport_key)
         self.role.values = (self._role_value("HOST"), self._role_value("JOIN"))
@@ -933,6 +985,8 @@ class CloakChatGUI(App):
         # Host LAN/Tor vẫn khóa vì địa chỉ được tạo tự động.
         is_public_host = self._role_key() == "HOST" and self._transport_key() == "PUBLIC"
         self.address.disabled = not (self._role_key() == "JOIN" or is_public_host)
+        self._save_preferences()
+        self._set_keep_awake(True)
         self.worker = threading.Thread(
             target=self._connection_worker,
             name="cloakchat-gui-worker",
@@ -1159,6 +1213,7 @@ class CloakChatGUI(App):
         self.search_input.font_size = dp(14) * self.font_scale
         self.nickname_input.font_size = dp(14) * self.font_scale
         self.address.font_size = dp(14) * self.font_scale
+        self._save_preferences()
 
     def copy_diagnostics(self):
         """Sao chép chẩn đoán kết nối; không đưa transcript chat vào clipboard."""
@@ -1727,6 +1782,7 @@ class CloakChatGUI(App):
             self._reset_ui()
 
     def _reset_ui(self):
+        self._set_keep_awake(False)
         def reset(_dt):
             self.start_button.disabled = False
             self.stop_button.disabled = True

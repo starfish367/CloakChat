@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import os
 import sys
 
@@ -63,6 +64,8 @@ app.set_font_scale(1.25)
 assert app.font_scale == 1.25
 assert app.chat_log.font_size > 16
 app.set_font_scale(1.0)
+assert app.preferences_path.is_file()
+assert json.loads(app.preferences_path.read_text(encoding="utf-8"))["font_scale"] == 1.0
 
 # Tìm kiếm tra nạp invite từ clipboard: chỉ nạp transport/address, không đụng key.
 FakeClipboard.value = create_invite("lan", "192.0.2.10:4567", "Test Host")
