@@ -147,6 +147,8 @@ class CloakChatGUI(App):
             "search_hint": "Tìm trong chat...",
             "search": "TÌM",
             "clear_search": "XÓA TÌM",
+            "latest": "TIN MỚI",
+            "message_bytes": "{count}/{limit} B",
             "details": "CHI TIẾT",
             "session_details_title": "Chi tiết phiên bảo mật",
             "transport_detail": "Transport",
@@ -259,6 +261,8 @@ class CloakChatGUI(App):
             "search_hint": "Search chat...",
             "search": "SEARCH",
             "clear_search": "CLEAR SEARCH",
+            "latest": "LATEST",
+            "message_bytes": "{count}/{limit} B",
             "details": "DETAILS",
             "session_details_title": "Secure session details",
             "transport_detail": "Transport",
@@ -660,9 +664,12 @@ class CloakChatGUI(App):
         self.search_button.bind(on_press=lambda *_: self.apply_search())
         self.clear_search_button = Button(text=self._t("clear_search"), size_hint_x=None, width=dp(90), **quick_style)
         self.clear_search_button.bind(on_press=lambda *_: self.clear_search())
+        self.latest_button = Button(text=self._t("latest"), size_hint_x=None, width=dp(76), **quick_style)
+        self.latest_button.bind(on_press=lambda *_: self.jump_to_latest())
         search_row.add_widget(self.search_input)
         search_row.add_widget(self.search_button)
         search_row.add_widget(self.clear_search_button)
+        search_row.add_widget(self.latest_button)
         content.add_widget(search_row)
 
         chat_panel = BoxLayout(orientation="vertical", padding=[dp(12), dp(10)], spacing=dp(6), size_hint_y=1)
@@ -677,6 +684,7 @@ class CloakChatGUI(App):
         self.chat_log = TextInput(readonly=True, multiline=True, size_hint_y=None, padding=[dp(14), dp(12)], background_normal="", background_color=(0.04, 0.06, 0.10, 1), foreground_color=(0.86, 0.90, 0.97, 1), cursor_color=(0, 0, 0, 0), font_size=dp(16), line_height=1.35)
         self.chat_log.bind(minimum_height=self.chat_log.setter("height"))
         scroll.add_widget(self.chat_log)
+        self.chat_scroll = scroll
         chat_panel.add_widget(scroll)
         content.add_widget(chat_panel)
 
@@ -691,13 +699,16 @@ class CloakChatGUI(App):
         content.add_widget(reaction_row)
 
         compose = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(7))
+        self.message_counter = Label(text=self._t("message_bytes").format(count=0, limit=65536), size_hint_x=None, width=dp(76), font_size=dp(10), color=(0.58, 0.65, 0.78, 1), halign="center", valign="middle")
         self.message_input = TextInput(hint_text=self._t("message_hint"), multiline=False, disabled=True, padding=[dp(14), dp(13)], background_normal="", background_color=(0.11, 0.15, 0.23, 1), foreground_color=(0.92, 0.95, 1, 1), hint_text_color=(0.45, 0.53, 0.67, 1))
         self.message_input.bind(on_text_validate=self.send_message)
+        self.message_input.bind(text=lambda *_: self._update_message_counter())
         self.reply_button = Button(text=self._t("reply"), size_hint_x=None, width=dp(78), disabled=True, background_normal="", background_color=(0.12, 0.18, 0.28, 1), font_size=dp(11))
         self.reply_button.bind(on_press=lambda *_: self._prepare_reply())
         self.send_button = Button(text=self._t("send"), size_hint_x=None, width=dp(76), disabled=True, background_normal="", background_color=(0.15, 0.63, 0.48, 1), bold=True)
         self.send_button.bind(on_press=self.send_message)
         compose.add_widget(self.reply_button)
+        compose.add_widget(self.message_counter)
         compose.add_widget(self.message_input)
         compose.add_widget(self.send_button)
         content.add_widget(compose)
@@ -825,6 +836,8 @@ class CloakChatGUI(App):
         self.search_input.hint_text = self._t("search_hint")
         self.search_button.text = self._t("search")
         self.clear_search_button.text = self._t("clear_search")
+        self.latest_button.text = self._t("latest")
+        self._update_message_counter()
         self.details_button.text = self._t("details")
         self.settings_toggle_button.text = self._t("hide_settings" if self.settings_expanded else "show_settings")
         self.orbot_port_input.hint_text = self._t("orbot_port")
@@ -926,6 +939,18 @@ class CloakChatGUI(App):
         )
         self.chat_log.text = "\n".join(entry["text"] for entry in entries) + ("\n" if entries else "")
         self.chat_log.cursor = (0, len(self.chat_log.text))
+
+    def jump_to_latest(self):
+        """Đưa khung chat về cuối transcript sau khi tìm kiếm hoặc cuộn."""
+        if hasattr(self, "chat_scroll"):
+            self.chat_scroll.scroll_y = 0
+
+    def _update_message_counter(self):
+        if not hasattr(self, "message_counter") or not hasattr(self, "message_input"):
+            return
+        count = len(self.message_input.text.encode("utf-8"))
+        self.message_counter.text = self._t("message_bytes").format(count=count, limit=65536)
+        self.message_counter.color = (0.95, 0.55, 0.35, 1) if count > 60000 else (0.58, 0.65, 0.78, 1)
 
     def apply_search(self):
         """Lọc log cục bộ; không gửi query hoặc nội dung chat qua mạng."""

@@ -24,6 +24,7 @@ class FakeClipboard:
 
 app = CloakChatGUI()
 root = app.build()
+app.set_language("vi")
 assert app.language == "vi"
 assert app._transport_key() == "LAN"
 _original_orbot_port = os.environ.pop("CLOAKCHAT_ORBOT_SOCKS_PORT", None)
@@ -49,7 +50,9 @@ assert app._group_mode_key() == "A"
 assert app._security_key() == "BALANCED"
 assert app.paste_button.text == "PASTE INVITE"
 assert app.fingerprint_button.disabled is True
-assert app.clear_chat_button.text == "CLEAR CHAT"
+assert app.clear_search_button.text == "CLEAR SEARCH"
+assert app.latest_button.text == "LATEST"
+assert app.message_counter.text == "0/65536 B"
 assert app.details_button.text == "DETAILS"
 assert app.orbot_check_button.text == "TEST ORBOT"
 assert app.orbot_port_input.hint_text == "Orbot port (auto)"
@@ -60,6 +63,10 @@ cloakchat_gui.Clipboard = FakeClipboard
 app.last_diagnostics = "Ports tried: 9050, 9150"
 app.copy_diagnostics()
 assert FakeClipboard.value == app.last_diagnostics
+app.message_input.text = "Xin chào 🌊"
+assert app.message_counter.text.startswith("14/")
+app.jump_to_latest()
+assert app.chat_scroll.scroll_y == 0
 app.set_font_scale(1.25)
 assert app.font_scale == 1.25
 assert app.chat_log.font_size > 16
@@ -83,7 +90,8 @@ app.set_language("vi")
 assert app.transport.text == "LAN trực tiếp"
 assert app._transport_key() == "LAN"
 assert app.paste_button.text == "DÁN INVITE"
-assert app.clear_chat_button.text == "XÓA CHAT"
+assert app.clear_search_button.text == "XÓA TÌM"
+assert app.latest_button.text == "TIN MỚI"
 assert app.details_button.text == "CHI TIẾT"
 assert app.orbot_check_button.text == "KIỂM TRA ORBOT"
 assert app.orbot_port_input.hint_text == "Cổng Orbot (tự động)"
