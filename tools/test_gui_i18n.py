@@ -65,6 +65,9 @@ app.copy_diagnostics()
 assert FakeClipboard.value == app.last_diagnostics
 app.message_input.text = "Xin chào 🌊"
 assert app.message_counter.text.startswith("14/")
+app.log_entries[:] = [{"id": "one", "text": "one"}, {"id": "two", "text": "two"}]
+app._render_log()
+app.chat_scroll.scroll_y = 0.5
 app.jump_to_latest()
 assert app.chat_scroll.scroll_y == 0
 app.set_font_scale(1.25)
@@ -88,6 +91,7 @@ app._set_invite_address(app.current_address)
 assert "example.onion" in app.invite_address_label.text
 app.set_language("vi")
 assert app.transport.text == "LAN trực tiếp"
+assert app.message_counter.text.startswith("14/")
 assert app._transport_key() == "LAN"
 assert app.paste_button.text == "DÁN INVITE"
 assert app.clear_search_button.text == "XÓA TÌM"

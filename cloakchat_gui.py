@@ -149,6 +149,7 @@ class CloakChatGUI(App):
             "clear_search": "XÓA TÌM",
             "latest": "TIN MỚI",
             "message_bytes": "{count}/{limit} B",
+            "message_too_large": "Tin nhắn vượt quá giới hạn 64 KiB UTF-8.",
             "details": "CHI TIẾT",
             "session_details_title": "Chi tiết phiên bảo mật",
             "transport_detail": "Transport",
@@ -263,6 +264,7 @@ class CloakChatGUI(App):
             "clear_search": "CLEAR SEARCH",
             "latest": "LATEST",
             "message_bytes": "{count}/{limit} B",
+            "message_too_large": "Message exceeds the 64 KiB UTF-8 limit.",
             "details": "DETAILS",
             "session_details_title": "Secure session details",
             "transport_detail": "Transport",
@@ -1761,6 +1763,9 @@ class CloakChatGUI(App):
     def send_message(self, *_args):
         message = self.message_input.text.strip()
         if not message or (not self.session and not self.group_host):
+            return
+        if len(message.encode("utf-8")) > core.MAX_MESSAGE_BYTES:
+            self._append_log(f"[!] {self._t('message_too_large')}")
             return
         try:
             if self.group_host:
