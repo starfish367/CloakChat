@@ -25,6 +25,8 @@ class FakeClipboard:
 app = CloakChatGUI()
 root = app.build()
 app.set_language("vi")
+app.transport.text = app._transport_value("LAN")
+app.role.text = app._role_value("HOST")
 assert app.language == "vi"
 assert app._transport_key() == "LAN"
 _original_orbot_port = os.environ.pop("CLOAKCHAT_ORBOT_SOCKS_PORT", None)
@@ -53,6 +55,11 @@ assert app.fingerprint_button.disabled is True
 assert app.clear_search_button.text == "CLEAR SEARCH"
 assert app.latest_button.text == "LATEST"
 assert app.message_counter.text == "0/65536 B"
+assert "Session duration" in app.session_timer_label.text
+app._save_preferences()
+prefs = json.loads(app.preferences_path.read_text(encoding="utf-8"))
+assert prefs["transport"] == "ORBOT"
+assert prefs["role"] == "JOIN"
 assert app.details_button.text == "DETAILS"
 assert app.orbot_check_button.text == "TEST ORBOT"
 assert app.orbot_port_input.hint_text == "Orbot port (auto)"
@@ -96,6 +103,7 @@ assert app._transport_key() == "LAN"
 assert app.paste_button.text == "DÁN INVITE"
 assert app.clear_search_button.text == "XÓA TÌM"
 assert app.latest_button.text == "TIN MỚI"
+assert "Thời lượng phiên" in app.session_timer_label.text
 assert app.details_button.text == "CHI TIẾT"
 assert app.orbot_check_button.text == "KIỂM TRA ORBOT"
 assert app.orbot_port_input.hint_text == "Cổng Orbot (tự động)"

@@ -103,6 +103,7 @@ class CloakChatGUI(App):
             "status_ready": "●  Sẵn sàng — LAN không dùng Tor, E2EE vẫn bật",
             "status_disconnected": "●  Đã ngắt kết nối — sẵn sàng cho phiên mới",
             "status_connected": "●  Đã kết nối — E2EE hoạt động — SHA-512 fingerprint đã xác nhận",
+            "session_duration": "Thời lượng phiên: {value}",
             "log_ready": "Sẵn sàng. Chọn LAN để kết nối nội bộ hoặc Tor để dùng .onion.",
             "safety_prompt": "Đối chiếu SHA-512 fingerprint với peer qua kênh tin cậy bên ngoài",
             "safety_question": "Bạn xác nhận hai fingerprint trùng khớp hoàn toàn?",
@@ -218,6 +219,7 @@ class CloakChatGUI(App):
             "status_ready": "●  Ready — LAN uses no Tor; E2EE remains on",
             "status_disconnected": "●  Disconnected — ready for a new session",
             "status_connected": "●  Connected — E2EE active — SHA-512 fingerprint verified",
+            "session_duration": "Session duration: {value}",
             "log_ready": "Ready. Choose Direct LAN for local chat or Tor for a .onion session.",
             "safety_prompt": "Compare the SHA-512 fingerprint with your peer through a trusted channel",
             "safety_question": "Do both fingerprints match exactly?",
@@ -340,6 +342,8 @@ class CloakChatGUI(App):
         self.preferences_path: Optional[Path] = None
         self.preferences = {}
         self.keep_awake = False
+        self.session_started_at: Optional[float] = None
+        self.session_timer_event = None
 
     def build(self):
         self.title = "CloakChat"
@@ -619,6 +623,8 @@ class CloakChatGUI(App):
         self.connection_label = Label(text=self._t("status_ready"), color=(0.58, 0.65, 0.78, 1), halign="left", valign="middle", size_hint_y=None, height=dp(28))
         self.connection_label.bind(size=self._sync_text_size)
         content.add_widget(self.connection_label)
+        self.session_timer_label = Label(text=self._t("session_duration").format(value="—"), color=(0.45, 0.53, 0.67, 1), halign="left", size_hint_y=None, height=dp(20), font_size=dp(11))
+        content.add_widget(self.session_timer_label)
 
         invite_row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
         self.invite_address_label = Label(text="", color=(0.72, 0.80, 0.92, 1), halign="left", valign="middle", shorten=True, shorten_from="right")
@@ -716,6 +722,7 @@ class CloakChatGUI(App):
         content.add_widget(compose)
         root.add_widget(content)
 
+        self._restore_connection_preferences()
         self._append_log(self._t("log_ready"))
         self.set_font_scale(self.font_scale)
         atexit.register(self.stop_connection)
@@ -741,12 +748,60 @@ class CloakChatGUI(App):
             data["nickname"] = self.nickname_input.text.strip()[:64]
         if hasattr(self, "orbot_port_input"):
             data["orbot_port"] = self.orbot_port_input.text.strip()[:5]
+        if hasattr(self, "transport"):
+            data["transport"] = self._transport_key()
+        if hasattr(self, "role"):
+            data["role"] = self._role_key()
+        if hasattr(self, "group_mode_spinner"):
+            data["group_mode"] = self._group_mode_key()
+        if hasattr(self, "security_level_spinner"):
+            data["security_level"] = self._security_key()
         self.preferences = data
         try:
             self.preferences_path.parent.mkdir(parents=True, exist_ok=True)
             self.preferences_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError:
             pass
+
+    def _restore_connection_preferences(self):
+        """Khôi phục profile UI cuối cùng; không khôi phục khóa hoặc dữ liệu phiên."""
+        transport = self.preferences.get("transport")
+        role = self.preferences.get("role")
+        group_mode = self.preferences.get("group_mode")
+        security_level = self.preferences.get("security_level")
+        if transport in self.TRANSPORT_LABELS:
+            self.transport.text = self._transport_value(transport)
+        if role in self.ROLE_LABELS:
+            self.role.text = self._role_value(role)
+        if group_mode in self.GROUP_MODE_LABELS:
+            self.group_mode_spinner.text = self._group_mode_value(group_mode)
+        if security_level in self.SECURITY_LABELS:
+            self.security_level_spinner.text = self._security_value(security_level)
+        self._role_changed()
+
+    def _begin_session_timer(self):
+        if self.session_timer_event:
+            self.session_timer_event.cancel()
+        self.session_started_at = time.monotonic()
+        self._update_session_timer()
+        self.session_timer_event = Clock.schedule_interval(lambda _dt: self._update_session_timer(), 1)
+
+    def _update_session_timer(self):
+        if not hasattr(self, "session_timer_label"):
+            return
+        if self.session_started_at is None:
+            value = "—"
+        else:
+            elapsed = max(0, int(time.monotonic() - self.session_started_at))
+            value = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
+        self.session_timer_label.text = self._t("session_duration").format(value=value)
+
+    def _stop_session_timer(self):
+        if self.session_timer_event:
+            self.session_timer_event.cancel()
+            self.session_timer_event = None
+        self.session_started_at = None
+        self._update_session_timer()
 
     def _set_keep_awake(self, enabled: bool):
         """Giữ màn hình sáng khi đang chat trên Android; luôn khôi phục khi dừng."""
@@ -860,6 +915,7 @@ class CloakChatGUI(App):
         self.chat_title.text = f"[b]{self._t('chat')}[/b]  [color=#93A4C3]{self._t('channel')}[/color]"
         self.reaction_label.text = self._t("reaction")
         self.message_input.hint_text = self._t("message_hint")
+        self._update_session_timer()
         self.security_badge.text = f"●  E2EE\n[size=11]{self._t('secure' if self.session else 'ready')}[/size]"
         self.connection_label.text = self._t("status_connected" if self.session else "status_ready")
         if self.current_address:
@@ -1113,6 +1169,7 @@ class CloakChatGUI(App):
     def _group_ready(self, _dt):
         self.details_button.disabled = False
         self.connection_label.text = self._t("group_b_ready" if self.group_mode == "B" else "group_ready")
+        self._begin_session_timer()
         self.message_input.disabled = False
         self.send_button.disabled = False
         self._enable_reactions(True)
@@ -1738,6 +1795,7 @@ class CloakChatGUI(App):
     def _chat_ready(self, _dt):
         self.details_button.disabled = False
         self.connection_label.text = self._t("status_connected")
+        self._begin_session_timer()
         self.security_badge.text = f"●  E2EE\n[size=11]{self._t('secure')}[/size]"
         self.message_input.disabled = self.group_mode == "B"
         self.send_button.disabled = self.group_mode == "B"
@@ -1813,6 +1871,7 @@ class CloakChatGUI(App):
 
     def _reset_ui(self):
         self._set_keep_awake(False)
+        self._stop_session_timer()
         def reset(_dt):
             self.start_button.disabled = False
             self.stop_button.disabled = True
