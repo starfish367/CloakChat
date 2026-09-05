@@ -41,6 +41,7 @@ from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
+from kivy.uix.widget import Widget
 from kivy.uix.image import Image
 from kivy.utils import platform
 
@@ -149,6 +150,11 @@ class CloakChatGUI(App):
             "search": "TÌM",
             "clear_search": "XÓA TÌM",
             "latest": "TIN MỚI",
+            "privacy_hide": "ẨN CHAT",
+            "privacy_show": "HIỆN CHAT",
+            "privacy_locked": "Nội dung chat đang ẩn. Nhấn HIỆN CHAT để xem.",
+            "reset_profile": "ĐẶT LẠI PROFILE",
+            "profile_reset": "Đã đặt lại profile cục bộ.",
             "message_bytes": "{count}/{limit} B",
             "message_too_large": "Tin nhắn vượt quá giới hạn 64 KiB UTF-8.",
             "details": "CHI TIẾT",
@@ -265,6 +271,11 @@ class CloakChatGUI(App):
             "search": "SEARCH",
             "clear_search": "CLEAR SEARCH",
             "latest": "LATEST",
+            "privacy_hide": "HIDE CHAT",
+            "privacy_show": "SHOW CHAT",
+            "privacy_locked": "Chat is hidden. Press SHOW CHAT to reveal it.",
+            "reset_profile": "RESET PROFILE",
+            "profile_reset": "Local profile reset.",
             "message_bytes": "{count}/{limit} B",
             "message_too_large": "Message exceeds the 64 KiB UTF-8 limit.",
             "details": "DETAILS",
@@ -329,6 +340,7 @@ class CloakChatGUI(App):
         self.incoming_files = {}
         self.log_entries = []
         self.search_query = ""
+        self.chat_hidden = False
         self.settings_expanded = True
         self.has_attempted_connection = False
         self.font_scale = 1.0
@@ -680,6 +692,16 @@ class CloakChatGUI(App):
         search_row.add_widget(self.latest_button)
         content.add_widget(search_row)
 
+        privacy_row = BoxLayout(size_hint_y=None, height=dp(36), spacing=dp(6))
+        self.privacy_button = Button(text=self._t("privacy_hide"), size_hint_x=None, width=dp(100), **quick_style)
+        self.privacy_button.bind(on_press=lambda *_: self.toggle_privacy())
+        self.reset_profile_button = Button(text=self._t("reset_profile"), size_hint_x=None, width=dp(128), **quick_style)
+        self.reset_profile_button.bind(on_press=lambda *_: self.reset_saved_profile())
+        privacy_row.add_widget(self.privacy_button)
+        privacy_row.add_widget(self.reset_profile_button)
+        privacy_row.add_widget(Widget())
+        content.add_widget(privacy_row)
+
         chat_panel = BoxLayout(orientation="vertical", padding=[dp(12), dp(10)], spacing=dp(6), size_hint_y=1)
         with chat_panel.canvas.before:
             Color(0.055, 0.08, 0.13, 1)
@@ -894,6 +916,8 @@ class CloakChatGUI(App):
         self.search_button.text = self._t("search")
         self.clear_search_button.text = self._t("clear_search")
         self.latest_button.text = self._t("latest")
+        self.privacy_button.text = self._t("privacy_show" if self.chat_hidden else "privacy_hide")
+        self.reset_profile_button.text = self._t("reset_profile")
         self._update_message_counter()
         self.details_button.text = self._t("details")
         self.settings_toggle_button.text = self._t("hide_settings" if self.settings_expanded else "show_settings")
@@ -989,6 +1013,9 @@ class CloakChatGUI(App):
             self.auto_delete_seconds = 0
 
     def _render_log(self):
+        if self.chat_hidden:
+            self.chat_log.text = self._t("privacy_locked")
+            return
         query = self.search_query.casefold().strip()
         entries = (
             [entry for entry in self.log_entries if query in entry["text"].casefold()]
@@ -1009,6 +1036,30 @@ class CloakChatGUI(App):
         count = len(self.message_input.text.encode("utf-8"))
         self.message_counter.text = self._t("message_bytes").format(count=count, limit=65536)
         self.message_counter.color = (0.95, 0.55, 0.35, 1) if count > 60000 else (0.58, 0.65, 0.78, 1)
+
+    def toggle_privacy(self):
+        """Ẩn/hiện transcript trên thiết bị, không xóa log và không gửi sự kiện mạng."""
+        self.chat_hidden = not self.chat_hidden
+        self.privacy_button.text = self._t("privacy_show" if self.chat_hidden else "privacy_hide")
+        self._render_log()
+
+    def reset_saved_profile(self):
+        """Xóa profile UI đã lưu; không dừng phiên và không đụng khóa mã hóa."""
+        self.preferences = {}
+        self.transport.text = self._transport_value("LAN")
+        self.role.text = self._role_value("HOST")
+        self.group_mode_spinner.text = self._group_mode_value("DIRECT")
+        self.security_level_spinner.text = self._security_value("BALANCED")
+        self.nickname_input.text = ""
+        self.orbot_port_input.text = ""
+        self.set_font_scale(1.0)
+        try:
+            if self.preferences_path and self.preferences_path.exists():
+                self.preferences_path.unlink()
+        except OSError:
+            pass
+        self._save_preferences()
+        self._append_log(f"[+] {self._t('profile_reset')}", delete_after=8)
 
     def apply_search(self):
         """Lọc log cục bộ; không gửi query hoặc nội dung chat qua mạng."""
@@ -1895,6 +1946,8 @@ class CloakChatGUI(App):
             self.reply_to_id = None
             self.search_query = ""
             self.search_input.text = ""
+            self.chat_hidden = False
+            self.privacy_button.text = self._t("privacy_hide")
             self.last_peer_message_id = None
             self.connection_label.text = self._t("status_disconnected")
             self.security_badge.text = f"●  E2EE\n[size=11]{self._t('ready')}[/size]"

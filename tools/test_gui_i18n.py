@@ -56,6 +56,19 @@ assert app.clear_search_button.text == "CLEAR SEARCH"
 assert app.latest_button.text == "LATEST"
 assert app.message_counter.text == "0/65536 B"
 assert "Session duration" in app.session_timer_label.text
+app.log_entries[:] = [{"id": "privacy", "text": "secret local text"}]
+app._render_log()
+app.toggle_privacy()
+assert app.chat_hidden is True
+assert "hidden" in app.chat_log.text.lower()
+app.toggle_privacy()
+assert app.chat_hidden is False
+assert "secret local text" in app.chat_log.text
+app.reset_saved_profile()
+assert app._transport_key() == "LAN"
+assert app._role_key() == "HOST"
+app.transport.text = "Orbot SOCKS5"
+app.role.text = "Join"
 app._save_preferences()
 prefs = json.loads(app.preferences_path.read_text(encoding="utf-8"))
 assert prefs["transport"] == "ORBOT"
@@ -103,6 +116,7 @@ assert app._transport_key() == "LAN"
 assert app.paste_button.text == "DÁN INVITE"
 assert app.clear_search_button.text == "XÓA TÌM"
 assert app.latest_button.text == "TIN MỚI"
+assert app.privacy_button.text == "ẨN CHAT"
 assert "Thời lượng phiên" in app.session_timer_label.text
 assert app.details_button.text == "CHI TIẾT"
 assert app.orbot_check_button.text == "KIỂM TRA ORBOT"
