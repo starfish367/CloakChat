@@ -56,6 +56,8 @@ assert app.clear_search_button.text == "CLEAR SEARCH"
 assert app.latest_button.text == "LATEST"
 assert app.message_counter.text == "0/65536 B"
 assert "Session duration" in app.session_timer_label.text
+import cloakchat_gui
+cloakchat_gui.Clipboard = FakeClipboard
 app.log_entries[:] = [{"id": "privacy", "text": "secret local text"}]
 app._render_log()
 app.toggle_privacy()
@@ -64,6 +66,14 @@ assert "hidden" in app.chat_log.text.lower()
 app.toggle_privacy()
 assert app.chat_hidden is False
 assert "secret local text" in app.chat_log.text
+app.toggle_autoscroll()
+assert app.auto_scroll_enabled is False
+assert app.autoscroll_button.text == "AUTO-SCROLL: OFF"
+app.toggle_autoscroll()
+assert app.auto_scroll_enabled is True
+app.copy_session_summary()
+assert "CloakChat session summary" in FakeClipboard.value
+assert "session_key" not in FakeClipboard.value.lower()
 app.reset_saved_profile()
 assert app._transport_key() == "LAN"
 assert app._role_key() == "HOST"
@@ -78,8 +88,6 @@ assert app.orbot_check_button.text == "TEST ORBOT"
 assert app.orbot_port_input.hint_text == "Orbot port (auto)"
 assert app.copy_diagnostics_button.text == "COPY DIAGNOSTICS"
 assert app.help_button.text == "HELP"
-import cloakchat_gui
-cloakchat_gui.Clipboard = FakeClipboard
 app.last_diagnostics = "Ports tried: 9050, 9150"
 app.copy_diagnostics()
 assert FakeClipboard.value == app.last_diagnostics
@@ -117,6 +125,8 @@ assert app.paste_button.text == "DÁN INVITE"
 assert app.clear_search_button.text == "XÓA TÌM"
 assert app.latest_button.text == "TIN MỚI"
 assert app.privacy_button.text == "ẨN CHAT"
+assert app.autoscroll_button.text == "TỰ CUỘN: BẬT"
+assert app.copy_session_button.text == "COPY PHIÊN"
 assert "Thời lượng phiên" in app.session_timer_label.text
 assert app.details_button.text == "CHI TIẾT"
 assert app.orbot_check_button.text == "KIỂM TRA ORBOT"

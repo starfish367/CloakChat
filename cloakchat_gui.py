@@ -153,6 +153,10 @@ class CloakChatGUI(App):
             "privacy_hide": "ẨN CHAT",
             "privacy_show": "HIỆN CHAT",
             "privacy_locked": "Nội dung chat đang ẩn. Nhấn HIỆN CHAT để xem.",
+            "autoscroll_on": "TỰ CUỘN: BẬT",
+            "autoscroll_off": "TỰ CUỘN: TẮT",
+            "copy_session": "COPY PHIÊN",
+            "session_copied": "Đã sao chép tóm tắt phiên; không chứa khóa bí mật.",
             "reset_profile": "ĐẶT LẠI PROFILE",
             "profile_reset": "Đã đặt lại profile cục bộ.",
             "message_bytes": "{count}/{limit} B",
@@ -274,6 +278,10 @@ class CloakChatGUI(App):
             "privacy_hide": "HIDE CHAT",
             "privacy_show": "SHOW CHAT",
             "privacy_locked": "Chat is hidden. Press SHOW CHAT to reveal it.",
+            "autoscroll_on": "AUTO-SCROLL: ON",
+            "autoscroll_off": "AUTO-SCROLL: OFF",
+            "copy_session": "COPY SESSION",
+            "session_copied": "Session summary copied; no secret keys included.",
             "reset_profile": "RESET PROFILE",
             "profile_reset": "Local profile reset.",
             "message_bytes": "{count}/{limit} B",
@@ -341,6 +349,7 @@ class CloakChatGUI(App):
         self.log_entries = []
         self.search_query = ""
         self.chat_hidden = False
+        self.auto_scroll_enabled = True
         self.settings_expanded = True
         self.has_attempted_connection = False
         self.font_scale = 1.0
@@ -692,14 +701,19 @@ class CloakChatGUI(App):
         search_row.add_widget(self.latest_button)
         content.add_widget(search_row)
 
-        privacy_row = BoxLayout(size_hint_y=None, height=dp(36), spacing=dp(6))
+        privacy_row = GridLayout(cols=2, size_hint_y=None, height=dp(72), spacing=dp(6))
         self.privacy_button = Button(text=self._t("privacy_hide"), size_hint_x=None, width=dp(100), **quick_style)
         self.privacy_button.bind(on_press=lambda *_: self.toggle_privacy())
         self.reset_profile_button = Button(text=self._t("reset_profile"), size_hint_x=None, width=dp(128), **quick_style)
         self.reset_profile_button.bind(on_press=lambda *_: self.reset_saved_profile())
+        self.autoscroll_button = Button(text=self._t("autoscroll_on"), size_hint_x=None, width=dp(116), **quick_style)
+        self.autoscroll_button.bind(on_press=lambda *_: self.toggle_autoscroll())
+        self.copy_session_button = Button(text=self._t("copy_session"), size_hint_x=None, width=dp(106), **quick_style)
+        self.copy_session_button.bind(on_press=lambda *_: self.copy_session_summary())
         privacy_row.add_widget(self.privacy_button)
+        privacy_row.add_widget(self.autoscroll_button)
+        privacy_row.add_widget(self.copy_session_button)
         privacy_row.add_widget(self.reset_profile_button)
-        privacy_row.add_widget(Widget())
         content.add_widget(privacy_row)
 
         chat_panel = BoxLayout(orientation="vertical", padding=[dp(12), dp(10)], spacing=dp(6), size_hint_y=1)
@@ -917,6 +931,8 @@ class CloakChatGUI(App):
         self.clear_search_button.text = self._t("clear_search")
         self.latest_button.text = self._t("latest")
         self.privacy_button.text = self._t("privacy_show" if self.chat_hidden else "privacy_hide")
+        self.autoscroll_button.text = self._t("autoscroll_on" if self.auto_scroll_enabled else "autoscroll_off")
+        self.copy_session_button.text = self._t("copy_session")
         self.reset_profile_button.text = self._t("reset_profile")
         self._update_message_counter()
         self.details_button.text = self._t("details")
@@ -1024,6 +1040,8 @@ class CloakChatGUI(App):
         )
         self.chat_log.text = "\n".join(entry["text"] for entry in entries) + ("\n" if entries else "")
         self.chat_log.cursor = (0, len(self.chat_log.text))
+        if self.auto_scroll_enabled and hasattr(self, "chat_scroll"):
+            self.chat_scroll.scroll_y = 0
 
     def jump_to_latest(self):
         """Đưa khung chat về cuối transcript sau khi tìm kiếm hoặc cuộn."""
@@ -1037,6 +1055,31 @@ class CloakChatGUI(App):
         self.message_counter.text = self._t("message_bytes").format(count=count, limit=65536)
         self.message_counter.color = (0.95, 0.55, 0.35, 1) if count > 60000 else (0.58, 0.65, 0.78, 1)
 
+    def toggle_autoscroll(self):
+        """Bật/tắt việc đưa transcript về cuối khi có log mới; chỉ là tùy chọn UI."""
+        self.auto_scroll_enabled = not self.auto_scroll_enabled
+        self.autoscroll_button.text = self._t("autoscroll_on" if self.auto_scroll_enabled else "autoscroll_off")
+        if self.auto_scroll_enabled:
+            self.jump_to_latest()
+
+    def copy_session_summary(self):
+        """Sao chép metadata phiên an toàn, không chứa khóa, transcript hay invite."""
+        transport = self._transport_key() if hasattr(self, "transport") else "UNKNOWN"
+        role = self._role_key() if hasattr(self, "role") else "UNKNOWN"
+        group = self._group_mode_key() if hasattr(self, "group_mode_spinner") else "UNKNOWN"
+        security = self._security_key() if hasattr(self, "security_level_spinner") else "UNKNOWN"
+        fingerprint = getattr(self, "last_fingerprint", "") or "not available"
+        summary = "\n".join((
+            "CloakChat session summary",
+            f"Transport: {transport}",
+            f"Role: {role}",
+            f"Group mode: {group}",
+            f"Security: {security}",
+            f"Fingerprint: {fingerprint}",
+        ))
+        Clipboard.copy(summary)
+        self._append_log(f"[+] {self._t('session_copied')}", delete_after=8)
+
     def toggle_privacy(self):
         """Ẩn/hiện transcript trên thiết bị, không xóa log và không gửi sự kiện mạng."""
         self.chat_hidden = not self.chat_hidden
@@ -1046,6 +1089,7 @@ class CloakChatGUI(App):
     def reset_saved_profile(self):
         """Xóa profile UI đã lưu; không dừng phiên và không đụng khóa mã hóa."""
         self.preferences = {}
+        self.auto_scroll_enabled = True
         self.transport.text = self._transport_value("LAN")
         self.role.text = self._role_value("HOST")
         self.group_mode_spinner.text = self._group_mode_value("DIRECT")
