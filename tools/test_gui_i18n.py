@@ -95,6 +95,12 @@ app.message_input.text = "Xin chào 🌊"
 assert app.message_counter.text.startswith("14/")
 app.log_entries[:] = [{"id": "one", "text": "one"}, {"id": "two", "text": "two"}]
 app._render_log()
+assert app.search_count_label.text == "2/2"
+app.toggle_autoscroll()
+app._append_log("three")
+assert app.latest_button.text == "LATEST (1)"
+app.jump_to_latest()
+assert app.latest_button.text == "LATEST"
 app.chat_scroll.scroll_y = 0.5
 app.jump_to_latest()
 assert app.chat_scroll.scroll_y == 0
@@ -113,6 +119,7 @@ app.copy_invite()
 assert FakeClipboard.value == app.address.text
 assert app._transport_key() == "LAN"
 assert app._role_key() == "JOIN"
+app.toggle_autoscroll()
 
 app.current_address = "example.onion"
 app._set_invite_address(app.current_address)
@@ -124,6 +131,7 @@ assert app._transport_key() == "LAN"
 assert app.paste_button.text == "DÁN INVITE"
 assert app.clear_search_button.text == "XÓA TÌM"
 assert app.latest_button.text == "TIN MỚI"
+assert "/" in app.search_count_label.text
 assert app.privacy_button.text == "ẨN CHAT"
 assert app.autoscroll_button.text == "TỰ CUỘN: BẬT"
 assert app.copy_session_button.text == "COPY PHIÊN"

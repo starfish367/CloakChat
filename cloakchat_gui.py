@@ -148,6 +148,7 @@ class CloakChatGUI(App):
             "chat_cleared": "Đã xóa lịch sử chat cục bộ trên thiết bị này.",
             "search_hint": "Tìm trong chat...",
             "search": "TÌM",
+            "search_count": "{shown}/{total}",
             "clear_search": "XÓA TÌM",
             "latest": "TIN MỚI",
             "privacy_hide": "ẨN CHAT",
@@ -273,6 +274,7 @@ class CloakChatGUI(App):
             "chat_cleared": "Local chat history was cleared on this device.",
             "search_hint": "Search chat...",
             "search": "SEARCH",
+            "search_count": "{shown}/{total}",
             "clear_search": "CLEAR SEARCH",
             "latest": "LATEST",
             "privacy_hide": "HIDE CHAT",
@@ -350,6 +352,7 @@ class CloakChatGUI(App):
         self.search_query = ""
         self.chat_hidden = False
         self.auto_scroll_enabled = True
+        self.unread_count = 0
         self.settings_expanded = True
         self.has_attempted_connection = False
         self.font_scale = 1.0
@@ -693,11 +696,13 @@ class CloakChatGUI(App):
         self.search_button.bind(on_press=lambda *_: self.apply_search())
         self.clear_search_button = Button(text=self._t("clear_search"), size_hint_x=None, width=dp(90), **quick_style)
         self.clear_search_button.bind(on_press=lambda *_: self.clear_search())
+        self.search_count_label = Label(text=self._t("search_count").format(shown=0, total=0), size_hint_x=None, width=dp(58), color=(0.45, 0.53, 0.67, 1), font_size=dp(10), halign="center")
         self.latest_button = Button(text=self._t("latest"), size_hint_x=None, width=dp(76), **quick_style)
         self.latest_button.bind(on_press=lambda *_: self.jump_to_latest())
         search_row.add_widget(self.search_input)
         search_row.add_widget(self.search_button)
         search_row.add_widget(self.clear_search_button)
+        search_row.add_widget(self.search_count_label)
         search_row.add_widget(self.latest_button)
         content.add_widget(search_row)
 
@@ -929,7 +934,8 @@ class CloakChatGUI(App):
         self.search_input.hint_text = self._t("search_hint")
         self.search_button.text = self._t("search")
         self.clear_search_button.text = self._t("clear_search")
-        self.latest_button.text = self._t("latest")
+        self._update_latest_label()
+        self._render_log()
         self.privacy_button.text = self._t("privacy_show" if self.chat_hidden else "privacy_hide")
         self.autoscroll_button.text = self._t("autoscroll_on" if self.auto_scroll_enabled else "autoscroll_off")
         self.copy_session_button.text = self._t("copy_session")
@@ -1031,6 +1037,8 @@ class CloakChatGUI(App):
     def _render_log(self):
         if self.chat_hidden:
             self.chat_log.text = self._t("privacy_locked")
+            if hasattr(self, "search_count_label"):
+                self.search_count_label.text = self._t("search_count").format(shown=0, total=len(self.log_entries))
             return
         query = self.search_query.casefold().strip()
         entries = (
@@ -1040,11 +1048,20 @@ class CloakChatGUI(App):
         )
         self.chat_log.text = "\n".join(entry["text"] for entry in entries) + ("\n" if entries else "")
         self.chat_log.cursor = (0, len(self.chat_log.text))
+        if hasattr(self, "search_count_label"):
+            self.search_count_label.text = self._t("search_count").format(shown=len(entries), total=len(self.log_entries))
         if self.auto_scroll_enabled and hasattr(self, "chat_scroll"):
             self.chat_scroll.scroll_y = 0
 
+    def _update_latest_label(self):
+        if hasattr(self, "latest_button"):
+            suffix = f" ({self.unread_count})" if self.unread_count else ""
+            self.latest_button.text = self._t("latest") + suffix
+
     def jump_to_latest(self):
         """Đưa khung chat về cuối transcript sau khi tìm kiếm hoặc cuộn."""
+        self.unread_count = 0
+        self._update_latest_label()
         if hasattr(self, "chat_scroll"):
             self.chat_scroll.scroll_y = 0
 
@@ -1132,6 +1149,9 @@ class CloakChatGUI(App):
         """Cập nhật UI trên main thread; auto-delete chỉ xóa bản sao cục bộ."""
         entry_id = message_id or secrets.token_hex(8)
         self.log_entries.append({"id": entry_id, "text": text.rstrip()})
+        if not self.auto_scroll_enabled and not self.chat_hidden:
+            self.unread_count += 1
+            self._update_latest_label()
         self._render_log()
         lifetime = delete_after if delete_after is not None else self.auto_delete_seconds
         if lifetime > 0 and message_id:
