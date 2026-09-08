@@ -157,6 +157,10 @@ class CloakChatGUI(App):
             "autoscroll_on": "TỰ CUỘN: BẬT",
             "autoscroll_off": "TỰ CUỘN: TẮT",
             "copy_session": "COPY PHIÊN",
+            "clear_draft": "XÓA SOẠN",
+            "copy_last": "COPY CUỐI",
+            "draft_cleared": "Đã xóa nội dung đang soạn.",
+            "last_copied": "Đã sao chép mục gần nhất.",
             "session_copied": "Đã sao chép tóm tắt phiên; không chứa khóa bí mật.",
             "reset_profile": "ĐẶT LẠI PROFILE",
             "profile_reset": "Đã đặt lại profile cục bộ.",
@@ -283,6 +287,10 @@ class CloakChatGUI(App):
             "autoscroll_on": "AUTO-SCROLL: ON",
             "autoscroll_off": "AUTO-SCROLL: OFF",
             "copy_session": "COPY SESSION",
+            "clear_draft": "CLEAR DRAFT",
+            "copy_last": "COPY LAST",
+            "draft_cleared": "Draft cleared.",
+            "last_copied": "Latest item copied.",
             "session_copied": "Session summary copied; no secret keys included.",
             "reset_profile": "RESET PROFILE",
             "profile_reset": "Local profile reset.",
@@ -706,7 +714,7 @@ class CloakChatGUI(App):
         search_row.add_widget(self.latest_button)
         content.add_widget(search_row)
 
-        privacy_row = GridLayout(cols=2, size_hint_y=None, height=dp(72), spacing=dp(6))
+        privacy_row = GridLayout(cols=2, size_hint_y=None, height=dp(108), spacing=dp(6))
         self.privacy_button = Button(text=self._t("privacy_hide"), size_hint_x=None, width=dp(100), **quick_style)
         self.privacy_button.bind(on_press=lambda *_: self.toggle_privacy())
         self.reset_profile_button = Button(text=self._t("reset_profile"), size_hint_x=None, width=dp(128), **quick_style)
@@ -715,10 +723,16 @@ class CloakChatGUI(App):
         self.autoscroll_button.bind(on_press=lambda *_: self.toggle_autoscroll())
         self.copy_session_button = Button(text=self._t("copy_session"), size_hint_x=None, width=dp(106), **quick_style)
         self.copy_session_button.bind(on_press=lambda *_: self.copy_session_summary())
+        self.clear_draft_button = Button(text=self._t("clear_draft"), **quick_style)
+        self.clear_draft_button.bind(on_press=lambda *_: self.clear_draft())
+        self.copy_last_button = Button(text=self._t("copy_last"), **quick_style)
+        self.copy_last_button.bind(on_press=lambda *_: self.copy_last_entry())
         privacy_row.add_widget(self.privacy_button)
         privacy_row.add_widget(self.autoscroll_button)
         privacy_row.add_widget(self.copy_session_button)
         privacy_row.add_widget(self.reset_profile_button)
+        privacy_row.add_widget(self.clear_draft_button)
+        privacy_row.add_widget(self.copy_last_button)
         content.add_widget(privacy_row)
 
         chat_panel = BoxLayout(orientation="vertical", padding=[dp(12), dp(10)], spacing=dp(6), size_hint_y=1)
@@ -939,6 +953,8 @@ class CloakChatGUI(App):
         self.privacy_button.text = self._t("privacy_show" if self.chat_hidden else "privacy_hide")
         self.autoscroll_button.text = self._t("autoscroll_on" if self.auto_scroll_enabled else "autoscroll_off")
         self.copy_session_button.text = self._t("copy_session")
+        self.clear_draft_button.text = self._t("clear_draft")
+        self.copy_last_button.text = self._t("copy_last")
         self.reset_profile_button.text = self._t("reset_profile")
         self._update_message_counter()
         self.details_button.text = self._t("details")
@@ -1096,6 +1112,20 @@ class CloakChatGUI(App):
         ))
         Clipboard.copy(summary)
         self._append_log(f"[+] {self._t('session_copied')}", delete_after=8)
+
+    def clear_draft(self):
+        """Xóa nội dung composer cục bộ mà không tạo sự kiện mạng."""
+        self.message_input.text = ""
+        self.reply_to_id = None
+        self._update_message_counter()
+        self._append_log(f"[+] {self._t('draft_cleared')}", delete_after=8)
+
+    def copy_last_entry(self):
+        """Sao chép mục log gần nhất; không chứa khóa hoặc gửi sự kiện mạng."""
+        if not self.log_entries:
+            return
+        Clipboard.copy(self.log_entries[-1]["text"])
+        self._append_log(f"[+] {self._t('last_copied')}", delete_after=8)
 
     def toggle_privacy(self):
         """Ẩn/hiện transcript trên thiết bị, không xóa log và không gửi sự kiện mạng."""

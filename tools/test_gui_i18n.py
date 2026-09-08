@@ -54,6 +54,8 @@ assert app.paste_button.text == "PASTE INVITE"
 assert app.fingerprint_button.disabled is True
 assert app.clear_search_button.text == "CLEAR SEARCH"
 assert app.latest_button.text == "LATEST"
+assert app.clear_draft_button.text == "CLEAR DRAFT"
+assert app.copy_last_button.text == "COPY LAST"
 assert app.message_counter.text == "0/65536 B"
 assert "Session duration" in app.session_timer_label.text
 import cloakchat_gui
@@ -73,6 +75,13 @@ app.toggle_autoscroll()
 assert app.auto_scroll_enabled is True
 app.copy_session_summary()
 assert "CloakChat session summary" in FakeClipboard.value
+app.message_input.text = "draft text"
+app.clear_draft()
+assert app.message_input.text == ""
+assert app.reply_to_id is None
+app.log_entries[:] = [{"id": "copy", "text": "copy me"}]
+app.copy_last_entry()
+assert FakeClipboard.value == "copy me"
 assert "session_key" not in FakeClipboard.value.lower()
 app.reset_saved_profile()
 assert app._transport_key() == "LAN"
@@ -135,6 +144,8 @@ assert "/" in app.search_count_label.text
 assert app.privacy_button.text == "ẨN CHAT"
 assert app.autoscroll_button.text == "TỰ CUỘN: BẬT"
 assert app.copy_session_button.text == "COPY PHIÊN"
+assert app.clear_draft_button.text == "XÓA SOẠN"
+assert app.copy_last_button.text == "COPY CUỐI"
 assert "Thời lượng phiên" in app.session_timer_label.text
 assert app.details_button.text == "CHI TIẾT"
 assert app.orbot_check_button.text == "KIỂM TRA ORBOT"
